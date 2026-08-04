@@ -1,0 +1,49 @@
+{
+	"pages": [
+		{
+			"path": "pages/chat/chat",
+			"style": {
+				"navigationBarTitleText": "AI 伙伴"
+			}
+		},
+		{
+			"path": "pages/memory/memory",
+			"style": {
+				"navigationBarTitleText": "记忆"
+			}
+		},
+		{
+			"path": "pages/settings/settings",
+			"style": {
+				"navigationBarTitleText": "设置"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "AI 伙伴",
+		"navigationBarBackgroundColor": "#F8F8F8",
+		"backgroundColor": "#F8F8F8"
+	},
+	"tabBar": {
+		"color": "#999999",
+		"selectedColor": "#5B7CFA",
+		"backgroundColor": "#ffffff",
+		"borderStyle": "black",
+		"list": [
+			{
+				"pagePath": "pages/chat/chat",
+				"text": "聊天"
+			},
+			{
+				"pagePath": "pages/memory/memory",
+				"text": "记忆"
+			},
+			{
+				"pagePath": "pages/settings/settings",
+				"text": "设置"
+			}
+		]
+	},
+	"uniIdRouter": {}
+}
