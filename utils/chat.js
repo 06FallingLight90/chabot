@@ -220,7 +220,11 @@ export async function compressContext(force = false) {
 			cursor = end
 		}
 		setConversationCompression(merged, cut)
-		addLog('info', '压缩上文', `压缩 ${cut - since} 条消息为概要（保留尾部 ${keepTail} 条）`)
+		addLog(
+			'info',
+			'压缩上文',
+			`压缩 ${cut - since} 条消息为概要（保留尾部 ${keepTail} 条）\n--- 压缩后上文 ---\n${merged}`
+		)
 		return true
 	} catch (e) {
 		addLog('err', '压缩上文失败', e.message)

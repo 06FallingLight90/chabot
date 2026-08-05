@@ -225,6 +225,8 @@ const reqLog = logs.find((l) => l.type === 'req')
 assert(reqLog.detail.includes('请求内容') && reqLog.detail.includes('压缩后继续聊'), '请求日志包含完整请求内容')
 const resLog = logs.find((l) => l.type === 'res')
 assert(resLog.detail.includes('返回内容') && resLog.detail.includes('好的~'), '响应日志包含完整返回内容')
+const compLog = logs.find((l) => l.type === 'info' && l.msg.includes('压缩上文'))
+assert(compLog.detail.includes('压缩后上文') && compLog.detail.includes('这是压缩后的对话概要'), '压缩日志包含完整压缩后上文')
 assert(logs.some((l) => l.type === 'info' && l.msg.includes('发送消息')), '包含操作日志（发送消息）')
 assert(logs.some((l) => l.type === 'info' && l.msg.includes('压缩上文')), '包含操作日志（压缩上文）')
 const newest = logs[0]

@@ -82,13 +82,14 @@
 ### 调试日志（utils/log.js）
 
 - 环形缓冲 200 条（`MAX_LOGS`），单条详情上限 30000 字符（`MAX_DETAIL_CHARS`）防存储膨胀；`addLog(type, msg, detail)`，type：`req`/`res`/`err`/`info`
-- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作、压缩执行；`settings.vue` 保存设置（不含 API Key）
+- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作、压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）
 - **设置页调试面板**：类型徽章（请求蓝/响应绿/错误红/信息灰）+ 摘要 + 时间，点击条目展开完整详情（收起态 JS 截断前 200 字符预览，不用 CSS line-clamp，兼容性可靠）；支持刷新与一键清空
 
 ### 当前情景（Scene）
 
 - LLM 每次回复输出 `Scene: 情景描述`（≤40字），结合注入的当前时间判断"用户此刻在做什么"
 - 持久化于 storage（key `scene`，最多 10 条 FIFO 历史），聊天页顶部情景条展示，点击弹窗可查看/修改/清除
+- 编辑弹窗内展示最近 10 条历史情景（最新在前），点击条目填入编辑框复用
 - `buildSystemPrompt` 注入「用户当前情景」+「情景变化」序列，帮助 LLM 理解情景过渡、衔接更流畅
 - 提示词见 `prompts.js` 的 `SCENE_GUIDE` 与 `buildNowText`
 - **时间模式**（设置项 `timeMode`）：`real` 现实时间（默认）注入 `buildNowText()` 供情景判断；`virtual` 虚拟时间不发送真实时间，情景由 LLM 自由想象（适合角色扮演）
@@ -97,6 +98,7 @@
 
 - 背景图固定于 scroll-view 可视区（cover 铺满，不随内容拉伸/滚动）
 - 头部「历史 / 新对话 / 清空」：历史弹窗切换/删除会话；压缩按钮位于历史弹窗内
+- **一键回到底部**：右下角浮动按钮，仅当用户上翻离开底部时出现（`@scroll` 的 `scrollTop` 差值 + `@touchmove` 方向兜底，隐藏靠 `@scrolltolower`/发消息回底）；滚动采用「先清空再设置 `scrollInto`」以强制触发
 - 侧边滑块：聊天记录 >15 条时出现，按住滑块按比例定位到对应消息（scroll-into-view 到 `msg-N` 锚点）
 - 场景编辑弹窗与历史弹窗、记忆页共用 mask/panel 样式
 

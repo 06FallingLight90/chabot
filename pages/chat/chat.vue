@@ -24,6 +24,10 @@
 				:style="bgStyle"
 				:scroll-into-view="scrollInto"
 				scroll-with-animation
+				@scroll="onMsgScroll"
+				@scrolltolower="onMsgScrollToLower"
+				@touchstart="onMsgTouchStart"
+				@touchmove="onMsgTouchMove"
 			>
 				<view class="msg-inner">
 					<view v-if="!messages.length" class="empty">
@@ -56,6 +60,11 @@
 				</view>
 				<view v-if="dragTip" class="slider-tip">{{ dragTip }}</view>
 			</view>
+
+			<!-- 一键回到底部：仅当用户上翻离开底部时出现 -->
+			<view v-if="showJumpBottom" class="jump-bottom" @tap="jumpToBottom">
+				<text class="jump-arrow">↓</text>
+			</view>
 		</view>
 
 		<view class="input-bar">
@@ -80,6 +89,20 @@
 					maxlength="200"
 					placeholder="用户此刻在做什么…（留空保存可清除）"
 				/>
+				<view v-if="sceneHistory.length" class="scene-history">
+					<view class="scene-history-head">历史情景（最近 {{ sceneHistory.length }} 条，点击填入编辑框）</view>
+					<scroll-view scroll-y class="scene-history-list">
+						<view
+							v-for="(h, i) in sceneHistory"
+							:key="i"
+							class="scene-history-item"
+							@tap="useSceneHistory(h)"
+						>
+							<text class="scene-history-idx">{{ i + 1 }}</text>
+							<text class="scene-history-text">{{ h }}</text>
+						</view>
+					</scroll-view>
+				</view>
 				<view class="edit-btns">
 					<button class="edit-btn cancel" @tap="closeSceneEdit">取消</button>
 					<button class="edit-btn ok" @tap="saveScene">保存</button>
@@ -131,7 +154,7 @@
 		removeConversation,
 		compressContext
 	} from '../../utils/chat.js'
-	import { getBackgroundImage, getScene, setScene } from '../../utils/storage.js'
+	import { getBackgroundImage, getScene, setScene, getSceneHistory } from '../../utils/storage.js'
 	import { formatMemoryTime } from '../../utils/memory.js'
 
 	const THUMB_H = 48 // 滑块拇指高度（px），与样式一致
@@ -148,9 +171,13 @@
 				scene: '',
 				showSceneEdit: false,
 				sceneDraft: '',
+				sceneHistory: [],
 				showHistory: false,
 				convList: [],
 				activeConvId: '',
+				showJumpBottom: false,
+				_lastScrollTop: 0, // 上翻检测基线（非模板字段）
+				_touchY: null,     // 触摸上翻检测（非模板字段）
 				scrollInto: '',
 				dragRatio: 1,     // 滑块位置比例（0=顶部 1=底部），松手后保留
 				dragTip: '',
@@ -183,6 +210,9 @@
 			this.refreshHeader()
 			this.bg = getBackgroundImage()
 			this.scene = getScene()
+			this.showJumpBottom = false
+			this._lastScrollTop = 0
+			this._touchY = null
 		},
 		onReady() {
 			this.querySlider()
@@ -218,10 +248,39 @@
 					})
 			},
 			scrollBottom() {
+				this.showJumpBottom = false
+				// scroll-into-view 仅在值变化时触发：先清空再设置，确保重复点击也能滚动
+				this.scrollInto = ''
 				this.$nextTick(() => {
 					this.scrollInto = 'anchor'
 					this.dragRatio = 1
 				})
+			},
+			// ---- 一键回到底部 ----
+			jumpToBottom() {
+				this.scrollBottom()
+			},
+			onMsgScroll(e) {
+				// App 端 scroll-view 事件不保证返回 scrollHeight/clientHeight，仅用 scrollTop 差值判断上翻
+				const st = e && e.detail && typeof e.detail.scrollTop === 'number' ? e.detail.scrollTop : null
+				if (st === null) return
+				if (!this.showJumpBottom && st < this._lastScrollTop - 3) {
+					this.showJumpBottom = true
+				}
+				this._lastScrollTop = st
+			},
+			onMsgScrollToLower() {
+				this.showJumpBottom = false
+			},
+			// 触摸兜底：手指下移（内容上移）＝正在上翻看历史；仅长对话启用避免误触
+			onMsgTouchStart(e) {
+				this._touchY = e.touches && e.touches.length ? e.touches[0].clientY : null
+			},
+			onMsgTouchMove(e) {
+				if (this.showJumpBottom || this.messages.length <= 15 || !e.touches || !e.touches.length) return
+				const y = e.touches[0].clientY
+				if (this._touchY !== null && y > this._touchY + 10) this.showJumpBottom = true
+				this._touchY = y
 			},
 			doRegenerate() {
 				if (this.loading) return
@@ -263,10 +322,14 @@
 			// ---- 当前情景编辑 ----
 			openSceneEdit() {
 				this.sceneDraft = this.scene
+				this.sceneHistory = getSceneHistory().slice().reverse() // 最新在前
 				this.showSceneEdit = true
 			},
 			closeSceneEdit() {
 				this.showSceneEdit = false
+			},
+			useSceneHistory(h) {
+				this.sceneDraft = h
 			},
 			saveScene() {
 				const v = this.sceneDraft.trim()
@@ -608,6 +671,27 @@
 		white-space: nowrap;
 	}
 
+	.jump-bottom {
+		position: absolute;
+		right: 96rpx;
+		bottom: 24rpx;
+		width: 88rpx;
+		height: 88rpx;
+		border-radius: 50%;
+		background: #5b7cfa;
+		box-shadow: 0 4rpx 16rpx rgba(91, 124, 250, 0.4);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 20;
+	}
+
+	.jump-arrow {
+		color: #fff;
+		font-size: 44rpx;
+		line-height: 1;
+	}
+
 	.mask {
 		position: fixed;
 		left: 0;
@@ -646,6 +730,46 @@
 		box-sizing: border-box;
 		font-size: 28rpx;
 		line-height: 1.5;
+	}
+
+	.scene-history {
+		margin-top: 20rpx;
+	}
+
+	.scene-history-head {
+		font-size: 22rpx;
+		color: #999;
+		margin-bottom: 10rpx;
+	}
+
+	.scene-history-list {
+		max-height: 300rpx;
+	}
+
+	.scene-history-item {
+		display: flex;
+		align-items: center;
+		padding: 14rpx 20rpx;
+		background: #f7f8fa;
+		border-radius: 10rpx;
+		margin-bottom: 12rpx;
+	}
+
+	.scene-history-idx {
+		flex-shrink: 0;
+		width: 40rpx;
+		font-size: 22rpx;
+		color: #5b7cfa;
+	}
+
+	.scene-history-text {
+		flex: 1;
+		min-width: 0;
+		font-size: 24rpx;
+		color: #666;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.edit-btns {
