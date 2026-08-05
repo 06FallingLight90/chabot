@@ -10,18 +10,63 @@
  */
 
 const KEY_MEMORIES = 'chabot_memories'
-const KEY_CHAT = 'chabot_chat_history'
+const KEY_CHAT = 'chabot_chat_history' // 旧版单流对话键（首次启动时迁移为会话）
+const KEY_CONVERSATIONS = 'chabot_conversations'
+const KEY_ACTIVE_CONV = 'chabot_active_conv'
+
+const MAX_TITLE_LEN = 16 // 会话标题截断长度
 
 let _memories = []
-let _chat = []
+let _conversations = [] // [{id, title, created_at, updated_at, summary, compressedUntil, messages:[...]}]
+let _activeConvId = ''
+let _chat = [] // 当前会话 messages 的活引用
 let _initialized = false
+let _convSeq = 0
 
-/** 初始化存储：加载内存数据（幂等） */
+/** 初始化存储：加载内存数据（幂等），并把旧版单流对话迁移为第一个会话 */
 export function initStorage() {
 	if (_initialized) return
 	_memories = _get(KEY_MEMORIES)
-	_chat = _get(KEY_CHAT)
+	_conversations = _get(KEY_CONVERSATIONS)
+	if (!_conversations.length) {
+		const legacy = _get(KEY_CHAT)
+		_conversations = [_makeConversation('', Array.isArray(legacy) ? legacy : [])]
+		_set(KEY_CONVERSATIONS, _conversations)
+	}
+	let savedId = ''
+	if (typeof uni !== 'undefined' && uni.getStorageSync) savedId = uni.getStorageSync(KEY_ACTIVE_CONV)
+	const active = _conversations.find((c) => c.id === savedId) || _conversations[0]
+	_activeConvId = active.id
+	_chat = active.messages
+	if (savedId !== _activeConvId) _set(KEY_ACTIVE_CONV, _activeConvId)
 	_initialized = true
+}
+
+function _makeConversation(title, messages) {
+	_convSeq++
+	const now = new Date().toISOString()
+	return {
+		id: 'c' + Date.now().toString(36) + '_' + _convSeq,
+		title: title || '',
+		created_at: now,
+		updated_at: now,
+		summary: '', // 压缩后的上文概要
+		compressedUntil: 0, // 已压缩并入概要的消息下标（含）
+		messages: messages || []
+	}
+}
+
+function _activeConversation() {
+	return _conversations.find((c) => c.id === _activeConvId) || _conversations[0] || null
+}
+
+function _makeTitle(text) {
+	const t = String(text || '').replace(/\s+/g, ' ').trim()
+	return t ? t.slice(0, MAX_TITLE_LEN) : '新对话'
+}
+
+function _persistConversations() {
+	_set(KEY_CONVERSATIONS, _conversations)
 }
 
 /** 当前记忆数组（活引用） */
@@ -29,7 +74,7 @@ export function getMemories() {
 	return _memories
 }
 
-/** 当前对话数组（活引用） */
+/** 当前对话数组（活引用，指向当前会话的消息） */
 export function getChatRows() {
 	return _chat
 }
@@ -45,26 +90,131 @@ export function persistMemories() {
 	_set(KEY_MEMORIES, _memories)
 }
 
-/** 追加一条对话记录并落盘 */
+/** 追加一条对话记录到当前会话并落盘；首条用户消息自动生成会话标题 */
 export function addChatRow(role, content) {
 	const row = { id: _nextId(_chat), role, content, created_at: new Date().toISOString() }
 	_chat.push(row)
-	_set(KEY_CHAT, _chat)
+	const conv = _activeConversation()
+	if (conv) {
+		conv.updated_at = row.created_at
+		if (!conv.title && role === 'user') conv.title = _makeTitle(content)
+		_persistConversations()
+	}
 	return row
 }
 
-/** 清空对话历史 */
+/** 清空当前会话（消息/标题/概要一并重置，会话本身保留） */
 export function clearChat() {
-	_chat = []
-	_set(KEY_CHAT, [])
+	const conv = _activeConversation()
+	if (conv) {
+		conv.messages = []
+		conv.title = ''
+		conv.summary = ''
+		conv.compressedUntil = 0
+		conv.updated_at = new Date().toISOString()
+		_chat = conv.messages
+		_persistConversations()
+	}
 }
 
-/** 清空全部数据（记忆 + 对话） */
+/** 从指定下标截断当前会话消息（重新生成用），并收敛压缩进度 */
+export function truncateChat(fromIndex) {
+	const conv = _activeConversation()
+	if (!conv) return
+	conv.messages = conv.messages.slice(0, fromIndex)
+	_chat = conv.messages
+	conv.updated_at = new Date().toISOString()
+	if (conv.compressedUntil > conv.messages.length) conv.compressedUntil = conv.messages.length
+	_persistConversations()
+}
+
+/** 清空全部数据（记忆 + 会话，重置为一个空会话） */
 export function clearAllData() {
 	_memories = []
-	_chat = []
+	_conversations = [_makeConversation('', [])]
+	_activeConvId = _conversations[0].id
+	_chat = _conversations[0].messages
 	_set(KEY_MEMORIES, [])
-	_set(KEY_CHAT, [])
+	_persistConversations()
+	_set(KEY_ACTIVE_CONV, _activeConvId)
+	_set(KEY_CHAT, []) // 顺手清掉旧键
+}
+
+// ---------- 会话管理 ----------
+
+/** 会话列表元信息（按更新时间倒序），供历史对话弹窗展示 */
+export function getConversations() {
+	return _conversations
+		.slice()
+		.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+		.map((c) => ({
+			id: c.id,
+			title: c.title || '新对话',
+			created_at: c.created_at,
+			updated_at: c.updated_at,
+			preview: c.messages.length ? c.messages[c.messages.length - 1].content : ''
+		}))
+}
+
+/** 当前会话 id */
+export function getActiveConversationId() {
+	return _activeConvId
+}
+
+/** 当前会话的压缩状态（概要 + 已压缩下标） */
+export function getConversationCompression() {
+	const conv = _activeConversation()
+	return { summary: (conv && conv.summary) || '', compressedUntil: (conv && conv.compressedUntil) || 0 }
+}
+
+/** 写入当前会话的压缩结果 */
+export function setConversationCompression(summary, compressedUntil) {
+	const conv = _activeConversation()
+	if (!conv) return
+	conv.summary = String(summary || '').trim()
+	conv.compressedUntil = Math.max(0, compressedUntil || 0)
+	conv.updated_at = new Date().toISOString()
+	_persistConversations()
+}
+
+/** 新建会话并切换为当前会话 */
+export function createConversation() {
+	const conv = _makeConversation('', [])
+	_conversations.unshift(conv)
+	_activeConvId = conv.id
+	_chat = conv.messages
+	_persistConversations()
+	_set(KEY_ACTIVE_CONV, _activeConvId)
+	return conv
+}
+
+/** 切换到指定会话 */
+export function switchConversation(id) {
+	const conv = _conversations.find((c) => c.id === id)
+	if (!conv) return false
+	_activeConvId = conv.id
+	_chat = conv.messages
+	_set(KEY_ACTIVE_CONV, _activeConvId)
+	return true
+}
+
+/** 删除会话；若删除的是当前会话则自动切到最近的一个（无则新建空会话） */
+export function deleteConversation(id) {
+	const idx = _conversations.findIndex((c) => c.id === id)
+	if (idx < 0) return false
+	_conversations.splice(idx, 1)
+	if (_activeConvId === id) {
+		const next = _conversations[0]
+		if (next) {
+			_activeConvId = next.id
+			_chat = next.messages
+		} else {
+			createConversation()
+		}
+		_set(KEY_ACTIVE_CONV, _activeConvId)
+	}
+	_persistConversations()
+	return true
 }
 
 /** 下一条记忆 id */
@@ -113,13 +263,40 @@ function _set(key, val) {
 
 // ---------- 当前情景 ----------
 
-/** 当前情景（LLM 每轮更新，用户可查看/修改） */
-export function getScene() {
-	return getSetting('scene', '')
+const SCENE_HISTORY_MAX = 10 // 情景历史保留条数（FIFO，超出丢弃最旧）
+
+/**
+ * 情景历史数组（最新一条在末尾，最多 SCENE_HISTORY_MAX 条）。
+ * 兼容旧版单字符串存储：自动转成单元素数组。
+ */
+export function getSceneHistory() {
+	const raw = getSetting('scene', [])
+	if (typeof raw === 'string') return raw ? [raw] : [] // 旧版存的是字符串
+	if (Array.isArray(raw)) return raw.filter((s) => typeof s === 'string' && s)
+	return []
 }
 
+/** 当前情景（LLM 每轮更新，用户可查看/修改）——取历史中最新的那条 */
+export function getScene() {
+	const h = getSceneHistory()
+	return h.length ? h[h.length - 1] : ''
+}
+
+/**
+ * 记录情景：追加到历史末尾并保留最新 SCENE_HISTORY_MAX 条（FIFO）。
+ * 与最新情景相同则不重复记录；空值表示清除全部情景。
+ */
 export function setScene(v) {
-	setSetting('scene', v || '')
+	const text = (v || '').trim()
+	if (!text) {
+		setSetting('scene', [])
+		return
+	}
+	const h = getSceneHistory()
+	if (h[h.length - 1] === text) return
+	h.push(text)
+	if (h.length > SCENE_HISTORY_MAX) h.splice(0, h.length - SCENE_HISTORY_MAX)
+	setSetting('scene', h)
 }
 
 // ---------- 聊天背景图片 ----------

@@ -68,6 +68,27 @@
 			<view v-if="s.personalityId === 'custom'" class="char-count">{{ s.customPrompt.length }} / 5000</view>
 		</view>
 
+		<view class="section">
+			<view class="sec-title">上下文压缩</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">自动压缩间隔</text>
+					<view class="mode-btns">
+						<view
+							v-for="o in compressOptions"
+							:key="o.value"
+							class="mode-btn"
+							:class="{ on: s.compressInterval === o.value }"
+							@tap="s.compressInterval = o.value"
+						>{{ o.label }}</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">
+					累计新增消息达到设定条数后，自动把上文交给 LLM 压缩成概要，减少后续请求的 token 消耗；历史消息仍完整保留可翻阅，也可在聊天页手动压缩。
+				</view>
+			</view>
+		</view>
+
 		<button class="save-btn" @tap="save">保存设置</button>
 
 		<view class="section">
@@ -87,6 +108,35 @@
 			<button class="danger-btn" @tap="clearData">清空记忆与对话</button>
 			<view class="hint">小程序端需在公众平台配置 request 合法域名；App 端保持联网即可。</view>
 		</view>
+
+		<view class="section">
+			<view class="sec-title">调试日志</view>
+			<view class="log-actions">
+				<button class="bg-btn primary" @tap="refreshLogs">刷新</button>
+				<button class="bg-btn" @tap="doClearLogs">清空日志</button>
+				<text class="log-count">共 {{ logs.length }} 条</text>
+			</view>
+			<scroll-view scroll-y class="log-list">
+				<view v-if="!logs.length" class="log-empty">暂无日志，进行对话或操作后会自动记录</view>
+				<view
+					v-for="l in logs"
+					:key="l.id"
+					class="log-item"
+					:class="{ expanded: expandedId === l.id }"
+					@tap="toggleLog(l.id)"
+				>
+					<view class="log-head">
+						<text class="log-badge" :class="'t-' + l.type">{{ typeName(l.type) }}</text>
+						<text class="log-msg">{{ l.msg }}</text>
+						<text class="log-time">{{ fmtTime(l.time) }}</text>
+					</view>
+					<view v-if="l.detail" class="log-detail">
+						<text class="log-detail-text">{{ expandedId === l.id ? l.detail : clipDetail(l.detail) }}</text>
+						<text class="log-toggle">{{ expandedId === l.id ? '收起' : '展开详情' }}</text>
+					</view>
+				</view>
+			</scroll-view>
+		</view>
 	</view>
 </template>
 
@@ -94,6 +144,9 @@
 	import { getSettings, saveSettings, clearConversation } from '../../utils/chat.js'
 	import { PERSONALITIES, PROVIDERS } from '../../utils/prompts.js'
 	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage } from '../../utils/storage.js'
+	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
+
+	const TYPE_NAMES = { req: '请求', res: '响应', err: '错误', info: '信息' }
 
 	export default {
 		data() {
@@ -101,7 +154,17 @@
 				s: getSettings(),
 				personalities: PERSONALITIES,
 				providers: PROVIDERS,
-				bg: getBackgroundImage()
+				bg: getBackgroundImage(),
+				logs: getLogs(),
+				expandedId: '',
+				compressOptions: [
+					{ label: '关闭', value: 0 },
+					{ label: '20条', value: 20 },
+					{ label: '30条', value: 30 },
+					{ label: '40条', value: 40 },
+					{ label: '60条', value: 60 },
+					{ label: '80条', value: 80 }
+				]
 			}
 		},
 		computed: {
@@ -119,8 +182,45 @@
 		onShow() {
 			this.s = getSettings()
 			this.bg = getBackgroundImage()
+			this.logs = getLogs()
 		},
 		methods: {
+			// ---- 调试日志 ----
+			refreshLogs() {
+				this.logs = getLogs()
+				this.expandedId = ''
+			},
+			toggleLog(id) {
+				this.expandedId = this.expandedId === id ? '' : id
+			},
+			// 收起状态仅展示预览片段，展开时由模板直接渲染完整 detail
+			clipDetail(d) {
+				const t = String(d || '')
+				return t.length > 200 ? t.slice(0, 200) + '…' : t
+			},
+			doClearLogs() {
+				uni.showModal({
+					title: '清空日志',
+					content: '确定清空全部调试日志吗？',
+					success: (res) => {
+						if (!res.confirm) return
+						clearDebugLogs()
+						this.logs = []
+						this.expandedId = ''
+						uni.showToast({ title: '已清空日志', icon: 'success' })
+					}
+				})
+			},
+			typeName(t) {
+				return TYPE_NAMES[t] || t
+			},
+			fmtTime(iso) {
+				if (!iso) return ''
+				const d = new Date(iso)
+				if (Number.isNaN(d.getTime())) return ''
+				const pad = (n) => String(n).padStart(2, '0')
+				return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+			},
 			applyProvider(p) {
 				this.s.baseUrl = p.url
 				this.s.model = p.model
@@ -137,6 +237,11 @@
 					return
 				}
 				saveSettings(this.s)
+				addLog(
+					'info',
+					'保存设置',
+					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval}`
+				)
 				uni.showToast({ title: '已保存', icon: 'success' })
 			},
 			chooseBg() {
@@ -419,5 +524,124 @@
 		color: #bbb;
 		line-height: 1.6;
 		margin-top: 10rpx;
+	}
+
+	.log-actions {
+		display: flex;
+		align-items: center;
+		margin-bottom: 20rpx;
+	}
+
+	.log-actions .bg-btn {
+		flex: none;
+		width: 200rpx;
+		margin-right: 16rpx;
+	}
+
+	.log-count {
+		font-size: 22rpx;
+		color: #999;
+	}
+
+	.log-list {
+		height: 620rpx;
+		background: #f7f8fa;
+		border-radius: 12rpx;
+		padding: 8rpx 20rpx;
+		box-sizing: border-box;
+	}
+
+	.log-empty {
+		padding: 80rpx 0;
+		text-align: center;
+		font-size: 24rpx;
+		color: #bbb;
+	}
+
+	.log-item {
+		padding: 16rpx 0;
+		border-bottom: 1rpx solid #f0f0f0;
+	}
+
+	.log-item:last-child {
+		border-bottom: none;
+	}
+
+	.log-item.expanded {
+		background: #fff;
+		border-radius: 8rpx;
+		padding-left: 12rpx;
+		padding-right: 12rpx;
+	}
+
+	.log-head {
+		display: flex;
+		align-items: center;
+	}
+
+	.log-badge {
+		flex-shrink: 0;
+		font-size: 20rpx;
+		padding: 2rpx 12rpx;
+		border-radius: 16rpx;
+		margin-right: 12rpx;
+		color: #fff;
+	}
+
+	.log-badge.t-req {
+		background: #5b7cfa;
+	}
+
+	.log-badge.t-res {
+		background: #00b578;
+	}
+
+	.log-badge.t-err {
+		background: #f53f3f;
+	}
+
+	.log-badge.t-info {
+		background: #86909c;
+	}
+
+	.log-msg {
+		flex: 1;
+		min-width: 0;
+		font-size: 26rpx;
+		color: #333;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.log-time {
+		flex-shrink: 0;
+		margin-left: 12rpx;
+		font-size: 20rpx;
+		color: #bbb;
+	}
+
+	.log-detail {
+		margin-top: 8rpx;
+		padding: 12rpx 16rpx;
+		background: #fff;
+		border-radius: 8rpx;
+	}
+
+	.log-detail-text {
+		font-size: 22rpx;
+		color: #666;
+		line-height: 1.5;
+		word-break: break-all;
+		white-space: pre-wrap;
+		-webkit-user-select: text;
+		user-select: text;
+	}
+
+	.log-toggle {
+		display: inline-block;
+		margin-top: 8rpx;
+		font-size: 22rpx;
+		color: #5b7cfa;
 	}
 </style>

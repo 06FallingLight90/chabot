@@ -9,19 +9,34 @@ import {
 	getChatRows,
 	addChatRow,
 	clearChat,
+	truncateChat,
 	getSetting,
 	setSetting,
-	getScene,
-	setScene
+	getSceneHistory,
+	setScene,
+	getConversations,
+	getActiveConversationId,
+	createConversation,
+	switchConversation,
+	deleteConversation,
+	getConversationCompression,
+	setConversationCompression
 } from './storage.js'
 import { MemoryStore } from './memory.js'
 import { buildSystemPrompt, buildNowText, getPersonalityById, getPersonaName } from './prompts.js'
 import { chatCompletion } from './llm.js'
+import { addLog } from './log.js'
 
 export const memoryStore = new MemoryStore()
 
 const HISTORY_ENTRIES = 15 // 每轮注入的对话历史条数（上限）
 const MAINTENANCE_INTERVAL_MS = 30 * 60 * 1000 // 维护节流间隔（30 分钟）
+const COMPRESS_KEEP_TAIL = 10 // 压缩时保留的最近完整消息条数
+const COMPRESS_MIN_NEW = 4 // 每次压缩至少新增这么多条才执行
+const COMPRESS_CHUNK = 80 // 单次压缩请求处理的最大消息条数（超出分批多次调用）
+const COMPRESS_SYSTEM = `你是对话压缩助手。把对话压缩成一份精炼概要，用于替代原文作为后续上下文。
+要求：保留关键事实、用户偏好、已做的决定、约定和正在进行的事；保留重要人物/时间/地点信息；
+用中文，150 字以内，只输出概要本身，不要解释、不要分段标题。`
 
 /** 初始化存储（幂等，App.vue onLaunch 调用） */
 export function initChatService() {
@@ -60,6 +75,7 @@ export function getSettings() {
 		personalityId,
 		customPrompt: getSetting('customPrompt', ''),
 		timeMode: getSetting('timeMode', 'real'), // 情景时间模式：real 现实时间 / virtual 虚拟时间
+		compressInterval: parseInt(getSetting('compressInterval', '0'), 10) || 0, // 自动压缩间隔（条），0=关闭
 		personaName: getPersonaName(personalityId)
 	}
 }
@@ -73,6 +89,7 @@ export function saveSettings(s) {
 	setSetting('personalityId', s.personalityId)
 	setSetting('customPrompt', s.customPrompt || '')
 	setSetting('timeMode', s.timeMode === 'virtual' ? 'virtual' : 'real')
+	setSetting('compressInterval', String(s.compressInterval || 0))
 }
 
 /** 聊天页历史（返回副本，避免 UI 直接改坏存储数组） */
@@ -83,6 +100,7 @@ export function getHistoryForUI() {
 /** 清空对话 */
 export function clearConversation() {
 	clearChat()
+	addLog('info', '清空当前对话')
 }
 
 /**
@@ -104,12 +122,126 @@ export function popLastAssistant() {
 	}
 	if (cutIdx < 0) return ''
 	// 移除 cutIdx 及之后所有行（即最新的 assistant + 可能之前的冗余）
-	rows.splice(cutIdx, rows.length - cutIdx)
-	// 落盘：全量重写 storage
-	if (typeof uni !== 'undefined' && uni.setStorageSync) {
-		try { uni.setStorageSync('chabot_chat_history', rows) } catch (e) {}
-	}
+	truncateChat(cutIdx)
+	addLog('info', '重新生成', `截断到第 ${cutIdx} 条消息，重发：${lastUser.slice(0, 20)}`)
 	return lastUser
+}
+
+// ---------- 会话管理 ----------
+
+/** 会话列表（供历史对话弹窗展示） */
+export function listConversations() {
+	return getConversations()
+}
+
+/** 当前会话 id */
+export function activeConversationId() {
+	return getActiveConversationId()
+}
+
+/** 开始新对话：当前对话非空则归档并新建，否则复用并重置当前空对话 */
+export function startNewConversation() {
+	if (getChatRows().length) {
+		createConversation()
+		addLog('info', '开始新对话')
+	} else {
+		clearChat()
+		addLog('info', '重置空对话')
+	}
+}
+
+/** 切换到指定会话 */
+export function openConversation(id) {
+	const ok = switchConversation(id)
+	if (ok) addLog('info', '切换会话', id)
+	return ok
+}
+
+/** 删除指定会话 */
+export function removeConversation(id) {
+	const ok = deleteConversation(id)
+	if (ok) addLog('info', '删除会话', id)
+	return ok
+}
+
+// ---------- 上下文压缩 ----------
+
+let _compressing = false
+
+/**
+ * 把上文交给 LLM 压缩为概要（手动或自动触发）。
+ * 压缩范围：上次压缩进度之后、保留尾部之前的消息；超过单批上限时分批调用。
+ * @param {boolean} force 手动触发传 true，忽略间隔/新增量限制
+ * @returns {Promise<boolean>} 是否实际执行了压缩
+ */
+export async function compressContext(force = false) {
+	if (_compressing) return false
+	const rows = getChatRows()
+	const keepTail = COMPRESS_KEEP_TAIL
+	if (rows.length <= keepTail + COMPRESS_MIN_NEW) return false
+
+	const { summary: prev, compressedUntil } = getConversationCompression()
+	const since = Math.min(compressedUntil, rows.length - keepTail)
+	const cut = Math.max(since, rows.length - keepTail)
+	if (!force && cut - since < COMPRESS_MIN_NEW) return false
+	if (cut <= since) return false
+
+	const s = getSettings()
+	if (!s.apiKey || !s.baseUrl || !s.model) return false
+
+	_compressing = true
+	try {
+		let merged = prev
+		let cursor = since
+		// 分批压缩，后一批把前一批的概要合并进来，避免单次请求过大
+		while (cursor < cut) {
+			const end = Math.min(cursor + COMPRESS_CHUNK, cut)
+			const batch = rows.slice(cursor, end)
+			const text = [
+				merged ? `已有的对话概要：\n${merged}` : '',
+				'以下是对话记录（越靠后越新）：',
+				batch.map((r) => `${r.role === 'user' ? '用户' : '你'}：${r.content}`).join('\n'),
+				'请把已有概要与新内容合并，输出一份完整的精炼概要。'
+			].filter(Boolean).join('\n\n')
+			const resp = await chatCompletion({
+				baseUrl: s.baseUrl,
+				apiKey: s.apiKey,
+				model: s.model,
+				messages: [
+					{ role: 'system', content: COMPRESS_SYSTEM },
+					{ role: 'user', content: text }
+				],
+				temperature: 0.3,
+				maxTokens: 512
+			})
+			const out = (resp.text || '').trim()
+			if (!out) return false
+			merged = out
+			cursor = end
+		}
+		setConversationCompression(merged, cut)
+		addLog('info', '压缩上文', `压缩 ${cut - since} 条消息为概要（保留尾部 ${keepTail} 条）`)
+		return true
+	} catch (e) {
+		addLog('err', '压缩上文失败', e.message)
+		throw e
+	} finally {
+		_compressing = false
+	}
+}
+
+/**
+ * 自动压缩检查：距上次压缩新增消息达到间隔阈值则压缩。
+ * 在每次对话回复落库后调用（异步、失败静默，不阻塞回复）。
+ */
+export async function maybeCompress() {
+	if (_compressing) return false
+	const interval = getSettings().compressInterval
+	if (!interval) return false
+	const { compressedUntil } = getConversationCompression()
+	if (getChatRows().length - compressedUntil < interval) return false
+	addLog('info', '自动压缩触发', `间隔 ${interval} 条`)
+	return compressContext()
 }
 
 /**
@@ -125,6 +257,7 @@ export async function sendMessage(userText) {
 
 	// 1. 检索记忆（核心槽 + 新鲜槽 + MMR 多样性槽）
 	const memoryText = memoryStore.retrieveContext(userText)
+	addLog('info', '发送消息', userText.slice(0, 40))
 
 	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆）
 	// 仅"现实时间"模式注入当前真实时间供情景判断；虚拟时间模式不发送
@@ -133,13 +266,15 @@ export async function sendMessage(userText) {
 	const system = buildSystemPrompt(
 		personalityPrompt || '你是友好的聊天伙伴。',
 		memoryText,
-		getScene(),
+		getSceneHistory(),
 		s.timeMode === 'virtual' ? '' : buildNowText()
 	)
 
-	// 3. 组装 messages：system + 历史 + 当前用户消息
+	// 3. 组装 messages：system + 压缩概要 + 未压缩历史 + 当前用户消息
 	const messages = [{ role: 'system', content: system }]
-	for (const h of getChatRows().slice(-HISTORY_ENTRIES)) {
+	const { summary, compressedUntil } = getConversationCompression()
+	if (summary) messages.push({ role: 'system', content: '此前对话概要：' + summary })
+	for (const h of getChatRows().slice(compressedUntil).slice(-HISTORY_ENTRIES)) {
 		messages.push({ role: h.role, content: h.content })
 	}
 	messages.push({ role: 'user', content: userText })
@@ -176,11 +311,18 @@ export async function sendMessage(userText) {
 		}
 		cleanLines.push(line)
 	}
-	if (newScene) setScene(newScene)
+	if (newScene) {
+		setScene(newScene)
+		addLog('info', '情景更新', newScene)
+	}
+	if (saved > 0) addLog('info', `记忆入库 ${saved} 条`)
 	const cleanReply = cleanLines.join('\n').trim()
 
 	// 7. 定期维护（L3 过期清理 / 降级 / 容量控制）
 	memoryStore.maintenance()
+
+	// 8. 自动压缩检查（异步执行，不阻塞回复展示）
+	maybeCompress().catch(() => { })
 
 	return { reply: cleanReply || '…', saved }
 }

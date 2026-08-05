@@ -5,7 +5,11 @@
 				<text class="persona">{{ personaName }}</text>
 				<text class="model">{{ model }}</text>
 			</view>
-			<text class="clear" @tap="confirmClear">清空</text>
+			<view class="header-right">
+				<text class="h-btn" @tap="openHistory">历史</text>
+				<text class="h-btn primary" @tap="newChat">新对话</text>
+				<text class="h-btn" @tap="confirmClear">清空</text>
+			</view>
 		</view>
 
 		<view class="scene-bar" v-if="scene" @tap="openSceneEdit">
@@ -82,12 +86,53 @@
 				</view>
 			</view>
 		</view>
+
+		<!-- 历史对话弹窗 -->
+		<view v-if="showHistory" class="mask" @tap="closeHistory">
+			<view class="history-panel" @tap.stop>
+				<view class="edit-title">对话历史</view>
+				<scroll-view scroll-y class="history-list">
+					<view v-if="!convList.length" class="history-empty">暂无历史对话</view>
+					<view
+						v-for="c in convList"
+						:key="c.id"
+						class="history-item"
+						:class="{ active: c.id === activeConvId }"
+						@tap="openConversation(c.id)"
+					>
+						<view class="history-main">
+							<view class="history-title">{{ c.title }}</view>
+							<view class="history-preview">{{ c.preview }}</view>
+						</view>
+						<view class="history-meta">
+							<text class="history-time">{{ c.timeText }}</text>
+							<text class="history-del" @tap.stop="confirmDeleteConv(c)">删除</text>
+						</view>
+					</view>
+				</scroll-view>
+				<button class="edit-btn ok compress-btn" :disabled="loading" @tap="doCompress">压缩上文为概要</button>
+				<button class="edit-btn cancel" @tap="closeHistory">关闭</button>
+			</view>
+		</view>
 	</view>
 </template>
 
 <script>
-	import { sendMessage, getHistoryForUI, clearConversation, getSettings, popLastAssistant } from '../../utils/chat.js'
+	import {
+		sendMessage,
+		getHistoryForUI,
+		clearConversation,
+		getSettings,
+		popLastAssistant,
+		startNewConversation,
+		listConversations,
+		activeConversationId,
+		openConversation,
+		removeConversation,
+		compressContext
+	} from '../../utils/chat.js'
 	import { getBackgroundImage, getScene, setScene } from '../../utils/storage.js'
+	import { formatMemoryTime } from '../../utils/memory.js'
 
 	const THUMB_H = 48 // 滑块拇指高度（px），与样式一致
 
@@ -103,6 +148,9 @@
 				scene: '',
 				showSceneEdit: false,
 				sceneDraft: '',
+				showHistory: false,
+				convList: [],
+				activeConvId: '',
 				scrollInto: '',
 				dragRatio: 1,     // 滑块位置比例（0=顶部 1=底部），松手后保留
 				dragTip: '',
@@ -227,6 +275,74 @@
 				this.showSceneEdit = false
 				uni.showToast({ title: v ? '已更新情景' : '已清除情景', icon: 'none' })
 			},
+			// ---- 会话历史 / 上下文压缩 ----
+			newChat() {
+				if (this.loading) return
+				startNewConversation()
+				this.messages = getHistoryForUI()
+				this.scene = getScene()
+				this.refreshHeader()
+				uni.showToast({ title: '已开始新对话', icon: 'none' })
+			},
+			openHistory() {
+				this.refreshConversations()
+				this.showHistory = true
+			},
+			closeHistory() {
+				this.showHistory = false
+			},
+			refreshConversations() {
+				this.convList = listConversations().map((c) => ({
+					...c,
+					timeText: formatMemoryTime(c.updated_at) || '刚刚'
+				}))
+				this.activeConvId = activeConversationId()
+			},
+			openConversation(id) {
+				if (id === this.activeConvId) {
+					this.closeHistory()
+					return
+				}
+				if (openConversation(id)) {
+					this.activeConvId = id
+					this.messages = getHistoryForUI()
+					this.scene = getScene()
+					this.showHistory = false
+					this.scrollBottom()
+				}
+			},
+			confirmDeleteConv(c) {
+				const wasActive = c.id === this.activeConvId
+				uni.showModal({
+					title: '删除对话',
+					content: '确定删除「' + c.title + '」吗？该对话记录将无法恢复。',
+					success: (res) => {
+						if (!res.confirm) return
+						removeConversation(c.id)
+						this.refreshConversations()
+						if (wasActive) {
+							this.messages = getHistoryForUI()
+							this.scene = getScene()
+						}
+					}
+				})
+			},
+			doCompress() {
+				if (this.loading) {
+					uni.showToast({ title: '请等待当前回复完成', icon: 'none' })
+					return
+				}
+				uni.showLoading({ title: '压缩中…' })
+				compressContext(true)
+					.then((done) => {
+						uni.hideLoading()
+						uni.showToast({ title: done ? '已压缩上文为概要' : '内容太少，暂无需压缩', icon: 'none' })
+					})
+					.catch((e) => {
+						uni.hideLoading()
+						uni.showToast({ title: '压缩失败：' + (e && e.message ? e.message : '未知错误'), icon: 'none' })
+					})
+			},
 			// ---- 侧边滑块 ----
 			querySlider() {
 				uni.createSelectorQuery()
@@ -294,10 +410,20 @@
 		color: #999;
 	}
 
-	.clear {
+	.header-right {
+		display: flex;
+		align-items: center;
+	}
+
+	.h-btn {
 		font-size: 26rpx;
-		color: #999;
-		padding: 8rpx 12rpx;
+		color: #666;
+		padding: 8rpx 16rpx;
+	}
+
+	.h-btn.primary {
+		color: #5b7cfa;
+		font-weight: 600;
 	}
 
 	.scene-bar {
@@ -544,5 +670,92 @@
 	.edit-btn.ok {
 		color: #fff;
 		background: #5b7cfa;
+	}
+
+	.history-panel {
+		width: 660rpx;
+		background: #fff;
+		border-radius: 20rpx;
+		padding: 32rpx;
+		box-sizing: border-box;
+	}
+
+	.history-list {
+		height: 560rpx;
+		margin-bottom: 24rpx;
+	}
+
+	.history-empty {
+		padding: 80rpx 0;
+		text-align: center;
+		font-size: 26rpx;
+		color: #bbb;
+	}
+
+	.history-item {
+		display: flex;
+		align-items: center;
+		padding: 20rpx 24rpx;
+		border-radius: 12rpx;
+		background: #f7f8fa;
+		margin-bottom: 16rpx;
+	}
+
+	.history-item.active {
+		background: #eef1fe;
+		border: 2rpx solid #5b7cfa;
+		box-sizing: border-box;
+	}
+
+	.history-main {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.history-title {
+		font-size: 28rpx;
+		color: #333;
+		font-weight: 500;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.history-preview {
+		margin-top: 6rpx;
+		font-size: 22rpx;
+		color: #999;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.history-meta {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		margin-left: 16rpx;
+		flex-shrink: 0;
+	}
+
+	.history-time {
+		font-size: 20rpx;
+		color: #bbb;
+	}
+
+	.history-del {
+		margin-top: 10rpx;
+		font-size: 22rpx;
+		color: #f53f3f;
+		padding: 4rpx 8rpx;
+	}
+
+	.compress-btn {
+		margin-bottom: 16rpx;
+	}
+
+	.compress-btn[disabled] {
+		opacity: 0.5;
+		color: #fff;
 	}
 </style>

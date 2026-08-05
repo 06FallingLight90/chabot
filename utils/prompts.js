@@ -16,7 +16,7 @@ importance: 5=核心身份 4=重要 3=中长期 2=临时 1=闲聊
 错误: Memory: user_fact: 用户叫小明            ← 类别后多了冒号
 正确: Memory: user_fact 用户叫小明 | keywords:小明 | importance:5 | level:L1`
 
-export const SCENE_GUIDE = `[情景] 回复时在 Memory 行之前输出 Scene 行：Scene: 中性记录此刻情境，谁在哪做什么，≤30字。格式严格 Scene: 开头后接一句陈述，不要加引号或多余符号。`
+export const SCENE_GUIDE = `[情景] 回复时在 Memory 行之前输出 Scene 行：Scene: 中性记录此刻情境，谁在哪做什么，≤30字。格式严格 Scene: 开头后接一句陈述，不要加引号或多余符号。严禁文学化描述。`
 
 /** 通用对话规则：与人格提示词一起注入 system */
 const CHAT_GUIDE = `[对话规则]
@@ -29,14 +29,21 @@ const CHAT_GUIDE = `[对话规则]
  * 构建完整的 system prompt
  * @param {string} personalityPrompt 人格提示词
  * @param {string} memoryText 检索到的记忆上下文（可为空）
- * @param {string} sceneText 当前情景（可为空）
+ * @param {string[]} sceneHistory 情景历史数组（最新在末尾，可为空）
  * @param {string} nowText 当前时间描述（可为空）
  */
-export function buildSystemPrompt(personalityPrompt, memoryText, sceneText, nowText) {
+export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText) {
 	let s = `${personalityPrompt.trim()}\n\n${CHAT_GUIDE}\n\n${MEMORY_GUIDE}\n\n${SCENE_GUIDE}`
 	const state = []
 	if (nowText) state.push(nowText)
-	if (sceneText) state.push(`用户当前情景: ${sceneText}`)
+	const scenes = Array.isArray(sceneHistory) ? sceneHistory : []
+	if (scenes.length) {
+		state.push(`用户当前情景: ${scenes[scenes.length - 1]}`)
+		// 注入最近的情景变化记录，帮助 LLM 理解过渡，保证情景衔接流畅
+		if (scenes.length > 1) {
+			state.push(`情景变化: ${scenes.slice(0, -1).map((sc, i) => `${i + 1}. ${sc}`).join('；')}`)
+		}
+	}
 	if (state.length) s += `\n\n[当前状态]\n${state.join('\n')}`
 	if (memoryText) s += `\n\n[你对用户的记忆]\n${memoryText}`
 	return s

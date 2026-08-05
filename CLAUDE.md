@@ -24,15 +24,16 @@
 ├── App.vue                # onLaunch 初始化存储 + 记忆维护
 ├── pages.json             # 页面注册 + tabBar（聊天/记忆/设置）
 ├── pages/
-│   ├── chat/chat.vue      # 聊天页（背景图、消息列表、输入）
+│   ├── chat/chat.vue      # 聊天页（背景图、消息列表、输入、会话历史/新对话/压缩入口）
 │   ├── memory/memory.vue  # 记忆页（筛选/编辑内容/优先级/级别/删除）
-│   └── settings/settings.vue  # 设置页（接口/人格/聊天背景/数据管理）
+│   └── settings/settings.vue  # 设置页（接口/人格/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
-│   ├── storage.js         # 跨端持久化层 + 设置项 + 背景图
+│   ├── storage.js         # 跨端持久化层 + 设置项 + 背景图 + 多会话模型 + 情景历史
 │   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 接口预设
-│   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request）
-│   └── chat.js            # 聊天服务编排（导出 memoryStore 单例）
+│   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点）
+│   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
+│   └── chat.js            # 聊天服务编排（导出 memoryStore 单例 + 会话管理 + 上下文压缩）
 └── scripts/test-memory.mjs  # 核心逻辑断言测试
 ```
 
@@ -58,23 +59,46 @@
 - 对外暴露统一同步接口：`getMemories` / `replaceMemories` / `persistMemories` / `addChatRow` 等
 - 设置项统一 `uni.setStorageSync`（key 前缀 `chabot_setting_`），写入带 try/catch 兜底
 - 聊天背景图：App/小程序 `uni.saveFile` 持久化到文件；H5 用 **canvas 压缩**（限宽 1080px、JPEG 0.8）转 base64，避免 localStorage 配额超限
+- **多会话模型**：对话存于 `chabot_conversations`（`[{id, title, created_at, updated_at, summary, compressedUntil, messages}]`）+ `chabot_active_conv`（当前会话 id）；`getChatRows()` 返回当前会话 messages 的**活引用**；旧版 `chabot_chat_history` 首次启动自动迁移为第一个会话，此后不再写入
+- **情景历史**：情景（key `scene`）存为最多 10 条字符串数组（FIFO，`getSceneHistory()`），`getScene()` 返回最新一条；相同情景不重复记录，空值清除全部
+
+### 会话管理（utils/chat.js + storage.js）
+
+- **开始新对话** `startNewConversation`：当前会话非空则归档新建，为空则重置复用
+- **历史弹窗**（聊天页头部「历史」）：`listConversations` 按更新时间倒序返回标题/预览；`openConversation` 切换当前会话；`removeConversation` 删除（删除当前会话自动切到最近一个）
+- 会话标题自动取首条用户消息（≤16 字）；清空对话仅清当前会话，会话本身保留
 
 ### 聊天链路（utils/chat.js）
 
-`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入最近 15 条历史 → 调 LLM → 落库对话 → 解析 `Scene:` 行更新当前情景、`Memory:` 行入库，均从展示文本剔除 → 执行维护
+`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「压缩概要（如有）+ 未压缩历史（最近 15 条）」→ 调 LLM → 落库对话 → 解析 `Scene:` 行更新当前情景、`Memory:` 行入库，均从展示文本剔除 → 执行维护 → 异步检查自动压缩（`maybeCompress`）
+
+### 上下文压缩（utils/chat.js）
+
+- **触发**：手动 `compressContext(true)`（聊天页历史弹窗「压缩上文为概要」）/ 自动 `maybeCompress`（每轮回复落库后异步检查，设置项 `compressInterval` 条数，0=关闭）
+- **压缩范围**：上次进度 `compressedUntil` 之后、保留最近 10 条（`COMPRESS_KEEP_TAIL`）之前的消息；超过 80 条（`COMPRESS_CHUNK`）分批调用、逐批把旧概要并入新概要，避免单次请求过大
+- **概要存储**：写入当前会话 `summary`/`compressedUntil`；后续请求注入 system 消息「此前对话概要：…」，原始消息仍完整保留可翻阅（仅发送层省略）
+- 关键常量位于 `chat.js` 顶部
+
+### 调试日志（utils/log.js）
+
+- 环形缓冲 200 条（`MAX_LOGS`），单条详情上限 30000 字符（`MAX_DETAIL_CHARS`）防存储膨胀；`addLog(type, msg, detail)`，type：`req`/`res`/`err`/`info`
+- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作、压缩执行；`settings.vue` 保存设置（不含 API Key）
+- **设置页调试面板**：类型徽章（请求蓝/响应绿/错误红/信息灰）+ 摘要 + 时间，点击条目展开完整详情（收起态 JS 截断前 200 字符预览，不用 CSS line-clamp，兼容性可靠）；支持刷新与一键清空
 
 ### 当前情景（Scene）
 
 - LLM 每次回复输出 `Scene: 情景描述`（≤40字），结合注入的当前时间判断"用户此刻在做什么"
-- 持久化于 storage（key `scene`），聊天页顶部情景条展示，点击弹窗可查看/修改/清除
+- 持久化于 storage（key `scene`，最多 10 条 FIFO 历史），聊天页顶部情景条展示，点击弹窗可查看/修改/清除
+- `buildSystemPrompt` 注入「用户当前情景」+「情景变化」序列，帮助 LLM 理解情景过渡、衔接更流畅
 - 提示词见 `prompts.js` 的 `SCENE_GUIDE` 与 `buildNowText`
 - **时间模式**（设置项 `timeMode`）：`real` 现实时间（默认）注入 `buildNowText()` 供情景判断；`virtual` 虚拟时间不发送真实时间，情景由 LLM 自由想象（适合角色扮演）
 
 ### 聊天页 UI
 
 - 背景图固定于 scroll-view 可视区（cover 铺满，不随内容拉伸/滚动）
+- 头部「历史 / 新对话 / 清空」：历史弹窗切换/删除会话；压缩按钮位于历史弹窗内
 - 侧边滑块：聊天记录 >15 条时出现，按住滑块按比例定位到对应消息（scroll-into-view 到 `msg-N` 锚点）
-- 场景编辑弹窗与记忆页共用 mask/panel 样式
+- 场景编辑弹窗与历史弹窗、记忆页共用 mask/panel 样式
 
 ## 开发约定
 

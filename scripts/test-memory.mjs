@@ -73,6 +73,8 @@ assert(list.length === before2 - 1, `删除后减少 1 条（${list.length}）`)
 assert(!list.find((r) => r.content.includes('团子')), '团子记忆已删除')
 
 console.log('\n[3] 补回测试所需数据')
+// 等待数毫秒，确保新写入的 created_at 晚于此前记忆，避免 queryRecent 因毫秒级并列跳过目标
+await new Promise((r) => setTimeout(r, 10))
 ms.save('conversation', '用户养了一只叫团子的橘猫', ['团子', '橘猫'], 4, 'L2')
 ms.save('event', '用户正在准备考研', ['考研'], 4, 'L2')
 list = ms.listMemories()
@@ -122,7 +124,8 @@ const sys = captured.data.messages[0]
 assert(sys.role === 'system' && sys.content.includes('[记忆]'), 'system 包含记忆指南')
 assert(sys.content.includes('[情景]') && sys.content.includes('当前时间'), 'system 包含情景指南与时间')
 assert(captured.data.messages[captured.data.messages.length - 1].content === '你好', '末尾为用户消息')
-assert(kv.get('chabot_chat_history').length === 2, '对话落库 2 条')
+assert(kv.get('chabot_conversations')[0].messages.length === 2, '对话落库 2 条（存于会话）')
+assert(chat.listConversations()[0].title === '你好', '会话标题取首条用户消息')
 // chat.memoryStore 与 ms 共享底层存储 _memories，sendMessage 解析出新记忆
 const chatMems = chat.memoryStore.listMemories()
 assert(chatMems.some((r) => r.content.includes('冰美式')), '聊天链路包含冰美式记忆')
@@ -167,6 +170,70 @@ chat.saveSettings({
 	customPrompt: '',
 	timeMode: 'real'
 })
+
+console.log('\n[9] 会话管理（历史对话 / 开始新对话）')
+let convs = chat.listConversations()
+assert(convs.length === 1, '当前只有 1 个会话')
+const firstId = convs[0].id
+assert(chat.activeConversationId() === firstId, '当前会话为第一个会话')
+chat.startNewConversation()
+assert(chat.getHistoryForUI().length === 0, '开始新对话后当前消息为空')
+assert(chat.listConversations().length === 2, '旧会话归档保留，共 2 个会话')
+const newId = chat.activeConversationId()
+assert(newId !== firstId, '当前会话已切到新会话')
+storage.addChatRow('user', '新会话的首条消息')
+assert(chat.getHistoryForUI().length === 1, '新会话写入 1 条')
+assert(chat.openConversation(firstId), '切回旧会话成功')
+assert(chat.getHistoryForUI().length >= 2, '旧会话消息已恢复')
+assert(chat.listConversations()[0].title === '新会话的首条消息', '新会话标题自动生成')
+assert(chat.removeConversation(newId), '删除第二个会话')
+assert(chat.listConversations().length === 1, '删除后回到 1 个会话')
+assert(chat.activeConversationId() === firstId, '删除非当前会话不影响当前会话')
+
+console.log('\n[10] 上下文压缩（LLM 概要 + 后续注入）')
+// 补足消息量：当前会话（含此前 3 轮）再落库 10 轮
+for (let i = 0; i < 10; i++) {
+	storage.addChatRow('user', '压缩测试消息' + i)
+	storage.addChatRow('assistant', '回复' + i)
+}
+const rowCount = chat.getHistoryForUI().length
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '这是压缩后的对话概要，保留了关键信息。' } }] } })
+}
+const compressed = await chat.compressContext(true)
+assert(compressed === true, '手动压缩执行成功')
+const cp = storage.getConversationCompression()
+assert(cp.summary.includes('对话概要'), '概要已保存')
+assert(cp.compressedUntil === rowCount - 10, `压缩进度 = 总数 - 保留尾部（${cp.compressedUntil}）`)
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '好的~' } }] } })
+}
+await chat.sendMessage('压缩后继续聊')
+assert(captured.data.messages.some((m) => m.role === 'system' && m.content.includes('此前对话概要')), '后续请求注入压缩概要')
+const sentAll = captured.data.messages.map((m) => m.content).join('\n')
+assert(!sentAll.includes('压缩测试消息0'), '被压缩的早期消息不再发送')
+assert(!sentAll.includes('你好'), '更早的原始消息不再发送')
+
+console.log('\n[11] 调试日志（LLM 请求/响应 + 操作日志 + 清空）')
+const logsMod = await import('../utils/log.js')
+let logs = logsMod.getLogs()
+assert(logs.some((l) => l.type === 'req' && l.msg.includes('LLM 请求')), '包含 LLM 请求日志')
+assert(logs.some((l) => l.type === 'res' && l.msg.includes('LLM 响应')), '包含 LLM 响应日志')
+const reqLog = logs.find((l) => l.type === 'req')
+assert(reqLog.detail.includes('请求内容') && reqLog.detail.includes('压缩后继续聊'), '请求日志包含完整请求内容')
+const resLog = logs.find((l) => l.type === 'res')
+assert(resLog.detail.includes('返回内容') && resLog.detail.includes('好的~'), '响应日志包含完整返回内容')
+assert(logs.some((l) => l.type === 'info' && l.msg.includes('发送消息')), '包含操作日志（发送消息）')
+assert(logs.some((l) => l.type === 'info' && l.msg.includes('压缩上文')), '包含操作日志（压缩上文）')
+const newest = logs[0]
+assert(newest && newest.time && newest.msg, '日志含时间与摘要字段')
+logsMod.addLog('err', '测试错误', 'detail-text')
+assert(logsMod.getLogs()[0].type === 'err', '错误日志可记录且排在最前')
+const logsBefore = logsMod.getLogs().length
+logsMod.clearLogs()
+assert(logsMod.getLogs().length === 0 && logsBefore > 0, '清空日志生效')
 
 console.log('\n================================')
 if (failed === 0) {
