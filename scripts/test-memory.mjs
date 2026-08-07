@@ -237,6 +237,68 @@ const logsBefore = logsMod.getLogs().length
 logsMod.clearLogs()
 assert(logsMod.getLogs().length === 0 && logsBefore > 0, '清空日志生效')
 
+console.log('\n[12] 会话独立记忆 / 人格快照 / 情景 / 复制')
+const memCount = chat.memoryStore.listMemories().length
+assert(memCount > 0, '当前会话存在记忆')
+storage.setScene('旧会话情景')
+assert(storage.getScene() === '旧会话情景', '旧会话可记录情景')
+
+chat.saveSettings({
+	baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-test',
+	temperature: 0.8, personalityId: 'tsundere', customPrompt: '', timeMode: 'real'
+})
+chat.startNewConversation()
+assert(chat.memoryStore.listMemories().length === 0, '新会话记忆独立为空（各会话分开存储）')
+assert(chat.getConversationSettings().personalityId === 'tsundere', '新会话快照人格 tsundere')
+assert(storage.getScene() === '', '新会话情景独立为空')
+storage.setScene('新会话情景')
+assert(storage.getScene() === '新会话情景', '新会话可独立记录情景')
+
+chat.saveSettings({
+	baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-test',
+	temperature: 0.8, personalityId: 'gentle', customPrompt: '', timeMode: 'real'
+})
+assert(chat.getConversationSettings().personalityId === 'tsundere', '全局人格变更不影响会话快照')
+
+assert(chat.openConversation(firstId), '切回旧会话')
+assert(chat.memoryStore.listMemories().length === memCount, '旧会话记忆独立保留')
+assert(chat.getConversationSettings().personalityId === 'gentle', '未快照会话回退全局人格')
+assert(storage.getScene() === '旧会话情景', '旧会话情景独立保留')
+
+chat.copyConversationToNew()
+assert(chat.getHistoryForUI().length >= 2, '复制对话：消息已复制')
+assert(chat.memoryStore.listMemories().length === memCount, '复制对话：记忆已复制')
+assert(chat.listConversations().some((c) => c.title.includes('副本')), '复制对话：标题带副本后缀')
+assert(storage.getScene() === '旧会话情景', '复制对话：情景随会话复制')
+
+assert(chat.openConversation(firstId), '再次切回旧会话')
+chat.copyMemoriesToNew()
+assert(chat.getHistoryForUI().length === 0, '复制记忆：新会话消息为空')
+assert(chat.memoryStore.listMemories().length === memCount, '复制记忆：记忆数量一致')
+assert(storage.getScene() === '', '复制记忆：新会话情景从零开始')
+
+console.log('\n[13] API 配置预设（至多 3 套快速切换）')
+assert(storage.getApiProfiles().length === 0, '初始无预设')
+assert(storage.saveApiProfile(0, 'DeepSeek', { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-a', model: 'deepseek-chat', temperature: 0.6 }), '保存第 1 套')
+assert(storage.saveApiProfile(1, 'OpenAI', { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-b', model: 'gpt-4o-mini', temperature: 0.8 }), '保存第 2 套')
+assert(storage.saveApiProfile(2, 'Kimi', { baseUrl: 'https://api.moonshot.cn/v1', apiKey: 'sk-c', model: 'moonshot-v1-8k', temperature: 0.5 }), '保存第 3 套')
+assert(storage.getApiProfiles().length === 3, '已保存 3 套')
+assert(storage.saveApiProfile(3, 'X', { baseUrl: 'x', apiKey: 'x', model: 'x' }) === false, '超出 3 套上限被拒绝')
+let p0 = storage.getApiProfile(0)
+assert(p0 && p0.model === 'deepseek-chat', '读取第 1 套模型正确')
+assert(p0 && p0.apiKey === 'sk-a', '读取第 1 套 apiKey 正确')
+assert(storage.saveApiProfile(1, 'OpenAI 新版', { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-b2', model: 'gpt-4o', temperature: 0.9 }), '覆盖第 2 套')
+assert(storage.getApiProfiles().length === 3, '覆盖后仍是 3 套')
+assert(storage.getApiProfile(1).model === 'gpt-4o', '覆盖后模型已更新')
+assert(storage.deleteApiProfile(2), '删除第 3 套')
+assert(storage.getApiProfiles().length === 2, '删除后剩 2 套')
+assert(storage.getApiProfile(2) === null, '被删槽位读取为 null')
+assert(storage.deleteApiProfile(9) === false, '越界删除被拒绝')
+// 快速切换：读取预设 → 应用到全局设置
+const apply = storage.getApiProfile(0)
+chat.saveSettings({ ...chat.getSettings(), ...apply })
+assert(chat.getSettings().model === 'deepseek-chat', '应用预设后全局设置已切换')
+
 console.log('\n================================')
 if (failed === 0) {
 	console.log('全部断言通过 ✓')

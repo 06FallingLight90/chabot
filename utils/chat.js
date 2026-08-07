@@ -20,7 +20,11 @@ import {
 	switchConversation,
 	deleteConversation,
 	getConversationCompression,
-	setConversationCompression
+	setConversationCompression,
+	getConversationPersonality,
+	setConversationPersonality,
+	duplicateConversationToNew,
+	duplicateMemoriesToNew
 } from './storage.js'
 import { MemoryStore } from './memory.js'
 import { buildSystemPrompt, buildNowText, getPersonalityById, getPersonaName } from './prompts.js'
@@ -92,6 +96,35 @@ export function saveSettings(s) {
 	setSetting('compressInterval', String(s.compressInterval || 0))
 }
 
+/**
+ * 当前会话生效设置 = 全局 API 配置 + 会话人格快照（快照为空时回退全局人格）。
+ * 每个会话独立记忆自己的人格设置，切换会话即切换人格。
+ */
+export function getConversationSettings() {
+	const s = getSettings()
+	const p = getConversationPersonality()
+	const personalityId = (p && p.personalityId) || s.personalityId
+	const customPrompt = p && p.customPrompt !== undefined ? p.customPrompt : s.customPrompt
+	const timeMode = (p && p.timeMode) || s.timeMode
+	return {
+		...s,
+		personalityId,
+		customPrompt,
+		timeMode,
+		personaName: getPersonaName(personalityId)
+	}
+}
+
+/** 把当前全局人格设置快照到当前会话 */
+function snapshotPersonality() {
+	const s = getSettings()
+	setConversationPersonality({
+		personalityId: s.personalityId,
+		customPrompt: s.customPrompt || '',
+		timeMode: s.timeMode
+	})
+}
+
 /** 聊天页历史（返回副本，避免 UI 直接改坏存储数组） */
 export function getHistoryForUI() {
 	return getChatRows().slice()
@@ -139,8 +172,9 @@ export function activeConversationId() {
 	return getActiveConversationId()
 }
 
-/** 开始新对话：当前对话非空则归档并新建，否则复用并重置当前空对话 */
+/** 开始新对话：当前对话非空则归档并新建，否则复用并重置当前空对话；并快照当前人格设置 */
 export function startNewConversation() {
+	memoryStore.resetState()
 	if (getChatRows().length) {
 		createConversation()
 		addLog('info', '开始新对话')
@@ -148,20 +182,41 @@ export function startNewConversation() {
 		clearChat()
 		addLog('info', '重置空对话')
 	}
+	snapshotPersonality()
 }
 
-/** 切换到指定会话 */
+/** 切换到指定会话（记忆与人格随会话切换，重置召回状态） */
 export function openConversation(id) {
 	const ok = switchConversation(id)
-	if (ok) addLog('info', '切换会话', id)
+	if (ok) {
+		memoryStore.resetState()
+		addLog('info', '切换会话', id)
+	}
 	return ok
 }
 
 /** 删除指定会话 */
 export function removeConversation(id) {
 	const ok = deleteConversation(id)
-	if (ok) addLog('info', '删除会话', id)
+	if (ok) {
+		memoryStore.resetState()
+		addLog('info', '删除会话', id)
+	}
 	return ok
+}
+
+/** 复制当前会话（消息+记忆+人格）到新会话并切换 */
+export function copyConversationToNew() {
+	duplicateConversationToNew()
+	memoryStore.resetState()
+	addLog('info', '复制对话到新会话')
+}
+
+/** 复制当前会话的记忆到新会话并切换 */
+export function copyMemoriesToNew() {
+	duplicateMemoriesToNew()
+	memoryStore.resetState()
+	addLog('info', '复制记忆到新会话')
 }
 
 // ---------- 上下文压缩 ----------
@@ -264,14 +319,15 @@ export async function sendMessage(userText) {
 	addLog('info', '发送消息', userText.slice(0, 40))
 
 	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆）
-	// 仅"现实时间"模式注入当前真实时间供情景判断；虚拟时间模式不发送
+	// 人格/时间模式取当前会话快照；API 配置取全局
+	const conv = getConversationSettings()
 	const personalityPrompt =
-		s.personalityId === 'custom' ? s.customPrompt : getPersonalityById(s.personalityId).prompt
+		conv.personalityId === 'custom' ? conv.customPrompt : getPersonalityById(conv.personalityId).prompt
 	const system = buildSystemPrompt(
 		personalityPrompt || '你是友好的聊天伙伴。',
 		memoryText,
 		getSceneHistory(),
-		s.timeMode === 'virtual' ? '' : buildNowText()
+		conv.timeMode === 'virtual' ? '' : buildNowText()
 	)
 
 	// 3. 组装 messages：system + 压缩概要 + 未压缩历史 + 当前用户消息

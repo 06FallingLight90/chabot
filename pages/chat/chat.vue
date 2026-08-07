@@ -133,6 +133,10 @@
 						</view>
 					</view>
 				</scroll-view>
+				<view class="copy-btns">
+					<button class="edit-btn copy-btn" :disabled="loading" @tap="copyConversation">复制对话</button>
+					<button class="edit-btn copy-btn" :disabled="loading" @tap="copyMemories">复制记忆</button>
+				</view>
 				<button class="edit-btn ok compress-btn" :disabled="loading" @tap="doCompress">压缩上文为概要</button>
 				<button class="edit-btn cancel" @tap="closeHistory">关闭</button>
 			</view>
@@ -145,13 +149,15 @@
 		sendMessage,
 		getHistoryForUI,
 		clearConversation,
-		getSettings,
+		getConversationSettings,
 		popLastAssistant,
 		startNewConversation,
 		listConversations,
 		activeConversationId,
 		openConversation,
 		removeConversation,
+		copyConversationToNew,
+		copyMemoriesToNew,
 		compressContext
 	} from '../../utils/chat.js'
 	import { getBackgroundImage, getScene, setScene, getSceneHistory } from '../../utils/storage.js'
@@ -219,7 +225,8 @@
 		},
 		methods: {
 			refreshHeader() {
-				const s = getSettings()
+				// 头部展示当前会话的人格（会话快照，非全局设置）
+				const s = getConversationSettings()
 				this.personaName = s.personaName
 				this.model = s.model
 			},
@@ -389,6 +396,24 @@
 						}
 					}
 				})
+			},
+			copyConversation() {
+				if (this.loading) return
+				copyConversationToNew()
+				this.messages = getHistoryForUI()
+				this.scene = getScene()
+				this.refreshHeader()
+				this.showHistory = false
+				uni.showToast({ title: '已复制对话到新会话', icon: 'none' })
+			},
+			copyMemories() {
+				if (this.loading) return
+				copyMemoriesToNew()
+				this.messages = getHistoryForUI()
+				this.scene = getScene()
+				this.refreshHeader()
+				this.showHistory = false
+				uni.showToast({ title: '已复制记忆到新会话', icon: 'none' })
 			},
 			doCompress() {
 				if (this.loading) {
@@ -881,5 +906,24 @@
 	.compress-btn[disabled] {
 		opacity: 0.5;
 		color: #fff;
+	}
+
+	.copy-btns {
+		display: flex;
+		margin-bottom: 16rpx;
+	}
+
+	.copy-btn {
+		flex: 1;
+		height: 76rpx;
+		line-height: 76rpx;
+		font-size: 26rpx;
+		color: #5b7cfa;
+		background: #eef1fe;
+		border-radius: 38rpx;
+	}
+
+	.copy-btn[disabled] {
+		opacity: 0.5;
 	}
 </style>

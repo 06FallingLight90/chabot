@@ -23,21 +23,42 @@ let _chat = [] // 当前会话 messages 的活引用
 let _initialized = false
 let _convSeq = 0
 
-/** 初始化存储：加载内存数据（幂等），并把旧版单流对话迁移为第一个会话 */
+/** 初始化存储：加载内存数据（幂等），并把旧版单流对话/全局记忆迁移到当前会话 */
 export function initStorage() {
 	if (_initialized) return
-	_memories = _get(KEY_MEMORIES)
 	_conversations = _get(KEY_CONVERSATIONS)
 	if (!_conversations.length) {
 		const legacy = _get(KEY_CHAT)
 		_conversations = [_makeConversation('', Array.isArray(legacy) ? legacy : [])]
 		_set(KEY_CONVERSATIONS, _conversations)
 	}
+	// 旧版全局记忆（chabot_memories）迁移到第一个尚无记忆的会话，随后清空旧键
+	const globalMemories = _get(KEY_MEMORIES)
+	if (globalMemories.length) {
+		const target = _conversations.find((c) => !(c.memories && c.memories.length)) || _conversations[0]
+		if (target) {
+			target.memories = globalMemories
+			_persistConversations()
+		}
+		_set(KEY_MEMORIES, [])
+	}
+	// 旧版全局情景（chabot_setting_scene）迁移到第一个尚无情景的会话，随后清空旧键
+	const legacyScene = getSetting('scene', '')
+	if (legacyScene) {
+		const target = _conversations.find((c) => !(c.scenes && c.scenes.length)) || _conversations[0]
+		if (target) {
+			const arr = typeof legacyScene === 'string' ? [legacyScene] : legacyScene
+			target.scenes = Array.isArray(arr) ? arr.filter((s) => typeof s === 'string' && s) : []
+			_persistConversations()
+		}
+		setSetting('scene', '')
+	}
 	let savedId = ''
 	if (typeof uni !== 'undefined' && uni.getStorageSync) savedId = uni.getStorageSync(KEY_ACTIVE_CONV)
 	const active = _conversations.find((c) => c.id === savedId) || _conversations[0]
 	_activeConvId = active.id
 	_chat = active.messages
+	_memories = active.memories
 	if (savedId !== _activeConvId) _set(KEY_ACTIVE_CONV, _activeConvId)
 	_initialized = true
 }
@@ -52,6 +73,9 @@ function _makeConversation(title, messages) {
 		updated_at: now,
 		summary: '', // 压缩后的上文概要
 		compressedUntil: 0, // 已压缩并入概要的消息下标（含）
+		personality: null, // 本会话独立的人格设置快照 {personalityId, customPrompt, timeMode}
+		scenes: [], // 本会话独立的情景历史（最新在末尾，最多 10 条）
+		memories: [], // 本会话独立的记忆数组
 		messages: messages || []
 	}
 }
@@ -69,7 +93,7 @@ function _persistConversations() {
 	_set(KEY_CONVERSATIONS, _conversations)
 }
 
-/** 当前记忆数组（活引用） */
+/** 当前会话记忆数组（活引用，指向当前会话的 memories） */
 export function getMemories() {
 	return _memories
 }
@@ -79,15 +103,17 @@ export function getChatRows() {
 	return _chat
 }
 
-/** 用新数组整体替换记忆并落盘 */
+/** 用新数组整体替换当前会话记忆并落盘（同步写回会话对象） */
 export function replaceMemories(arr) {
 	_memories = arr || []
+	const conv = _activeConversation()
+	if (conv) conv.memories = _memories
 	persistMemories()
 }
 
-/** 全量持久化记忆（小数据量，全量重写简单可靠） */
+/** 全量持久化当前会话记忆（写入会话对象，随会话整体落盘） */
 export function persistMemories() {
-	_set(KEY_MEMORIES, _memories)
+	_persistConversations()
 }
 
 /** 追加一条对话记录到当前会话并落盘；首条用户消息自动生成会话标题 */
@@ -130,13 +156,13 @@ export function truncateChat(fromIndex) {
 
 /** 清空全部数据（记忆 + 会话，重置为一个空会话） */
 export function clearAllData() {
-	_memories = []
 	_conversations = [_makeConversation('', [])]
 	_activeConvId = _conversations[0].id
 	_chat = _conversations[0].messages
-	_set(KEY_MEMORIES, [])
+	_memories = _conversations[0].memories
 	_persistConversations()
 	_set(KEY_ACTIVE_CONV, _activeConvId)
+	_set(KEY_MEMORIES, []) // 顺手清掉旧版全局记忆键
 	_set(KEY_CHAT, []) // 顺手清掉旧键
 }
 
@@ -183,17 +209,19 @@ export function createConversation() {
 	_conversations.unshift(conv)
 	_activeConvId = conv.id
 	_chat = conv.messages
+	_memories = conv.memories
 	_persistConversations()
 	_set(KEY_ACTIVE_CONV, _activeConvId)
 	return conv
 }
 
-/** 切换到指定会话 */
+/** 切换到指定会话（记忆同步切换） */
 export function switchConversation(id) {
 	const conv = _conversations.find((c) => c.id === id)
 	if (!conv) return false
 	_activeConvId = conv.id
 	_chat = conv.messages
+	_memories = conv.memories
 	_set(KEY_ACTIVE_CONV, _activeConvId)
 	return true
 }
@@ -208,6 +236,7 @@ export function deleteConversation(id) {
 		if (next) {
 			_activeConvId = next.id
 			_chat = next.messages
+			_memories = next.memories
 		} else {
 			createConversation()
 		}
@@ -215,6 +244,65 @@ export function deleteConversation(id) {
 	}
 	_persistConversations()
 	return true
+}
+
+/** 当前会话的人格设置快照（无则为 null，回退全局设置） */
+export function getConversationPersonality() {
+	const conv = _activeConversation()
+	return (conv && conv.personality) || null
+}
+
+/** 写入当前会话的人格设置快照 */
+export function setConversationPersonality(p) {
+	const conv = _activeConversation()
+	if (!conv) return
+	conv.personality = p || null
+	_persistConversations()
+}
+
+/**
+ * 复制当前会话到新会话（消息 + 记忆 + 概要 + 人格快照，标题加"副本"后缀）并切换。
+ * @returns {object} 新会话
+ */
+export function duplicateConversationToNew() {
+	const conv = _activeConversation()
+	const src = {
+		title: conv.title,
+		messages: conv.messages.map((m) => ({ ...m })),
+		memories: (conv.memories || []).map((m) => ({ ...m })),
+		summary: conv.summary,
+		compressedUntil: conv.compressedUntil,
+		personality: conv.personality ? { ...conv.personality } : null,
+		scenes: (conv.scenes || []).slice()
+	}
+	const nu = _makeConversation(src.title ? src.title + '（副本）' : '', src.messages)
+	nu.memories = src.memories
+	nu.summary = src.summary
+	nu.compressedUntil = src.compressedUntil
+	nu.personality = src.personality
+	nu.scenes = src.scenes
+	_conversations.unshift(nu)
+	_activeConvId = nu.id
+	_chat = nu.messages
+	_memories = nu.memories
+	_persistConversations()
+	_set(KEY_ACTIVE_CONV, _activeConvId)
+	return nu
+}
+
+/** 仅复制当前会话的记忆到新会话（含人格快照）并切换 */
+export function duplicateMemoriesToNew() {
+	const conv = _activeConversation()
+	const nu = _makeConversation('', [])
+	nu.memories = (conv.memories || []).map((m) => ({ ...m }))
+	nu.personality = conv.personality ? { ...conv.personality } : null
+	_conversations.unshift(nu)
+	_activeConvId = nu.id
+	_chat = nu.messages
+	_memories = nu.memories
+	_persistConversations()
+	_set(KEY_ACTIVE_CONV, _activeConvId)
+	return nu
 }
 
 /** 下一条记忆 id */
@@ -261,42 +349,103 @@ function _set(key, val) {
 	}
 }
 
-// ---------- 当前情景 ----------
+// ---------- 当前情景（随会话独立） ----------
 
 const SCENE_HISTORY_MAX = 10 // 情景历史保留条数（FIFO，超出丢弃最旧）
 
-/**
- * 情景历史数组（最新一条在末尾，最多 SCENE_HISTORY_MAX 条）。
- * 兼容旧版单字符串存储：自动转成单元素数组。
- */
+/** 当前会话的情景历史数组（最新在末尾，最多 10 条），返回副本避免外部改坏 */
 export function getSceneHistory() {
-	const raw = getSetting('scene', [])
-	if (typeof raw === 'string') return raw ? [raw] : [] // 旧版存的是字符串
-	if (Array.isArray(raw)) return raw.filter((s) => typeof s === 'string' && s)
-	return []
+	const conv = _activeConversation()
+	const h = conv && Array.isArray(conv.scenes) ? conv.scenes : []
+	return h.slice()
 }
 
-/** 当前情景（LLM 每轮更新，用户可查看/修改）——取历史中最新的那条 */
+/** 当前情景（LLM 每轮更新，用户可查看/修改）——取当前会话历史中最新的那条 */
 export function getScene() {
 	const h = getSceneHistory()
 	return h.length ? h[h.length - 1] : ''
 }
 
 /**
- * 记录情景：追加到历史末尾并保留最新 SCENE_HISTORY_MAX 条（FIFO）。
- * 与最新情景相同则不重复记录；空值表示清除全部情景。
+ * 记录当前会话情景：追加到会话历史末尾并保留最新 10 条（FIFO）。
+ * 与最新情景相同则不重复记录；空值表示清除该会话的全部情景。
  */
 export function setScene(v) {
+	const conv = _activeConversation()
+	if (!conv) return
+	if (!Array.isArray(conv.scenes)) conv.scenes = []
 	const text = (v || '').trim()
 	if (!text) {
-		setSetting('scene', [])
+		conv.scenes = []
+		_persistConversations()
 		return
 	}
-	const h = getSceneHistory()
-	if (h[h.length - 1] === text) return
-	h.push(text)
-	if (h.length > SCENE_HISTORY_MAX) h.splice(0, h.length - SCENE_HISTORY_MAX)
-	setSetting('scene', h)
+	if (conv.scenes[conv.scenes.length - 1] === text) return
+	conv.scenes.push(text)
+	if (conv.scenes.length > SCENE_HISTORY_MAX) conv.scenes.splice(0, conv.scenes.length - SCENE_HISTORY_MAX)
+	_persistConversations()
+}
+
+// ---------- API 配置预设（最多 3 套） ----------
+
+const KEY_API_PROFILES = 'chabot_setting_api_profiles'
+const API_PROFILE_MAX = 3
+
+/** 已保存的 API 配置预设数组（每套 {id,name,baseUrl,apiKey,model,temperature}），返回副本 */
+export function getApiProfiles() {
+	if (typeof uni === 'undefined' || !uni.getStorageSync) return []
+	const v = uni.getStorageSync(KEY_API_PROFILES)
+	return Array.isArray(v) ? v.slice() : []
+}
+
+function _setApiProfiles(arr) {
+	if (typeof uni !== 'undefined' && uni.setStorageSync) {
+		try {
+			uni.setStorageSync(KEY_API_PROFILES, arr)
+		} catch (e) {
+			console.error('[storage] API 预设保存失败:', e)
+		}
+	}
+}
+
+/**
+ * 保存/覆盖第 index（0~2）套 API 预设。
+ * 超出 3 套上限返回 false；覆盖时保留原 id。
+ */
+export function saveApiProfile(index, name, cfg = {}) {
+	index = parseInt(index, 10)
+	if (!Number.isInteger(index) || index < 0 || index >= API_PROFILE_MAX) return false
+	const arr = getApiProfiles()
+	const old = arr[index]
+	const item = {
+		id: (old && old.id) || 'ap' + Date.now().toString(36) + '_' + index,
+		name: String(name || '预设' + (index + 1)).trim().slice(0, 12) || '预设' + (index + 1),
+		baseUrl: (cfg.baseUrl || '').trim(),
+		apiKey: (cfg.apiKey || '').trim(),
+		model: (cfg.model || '').trim(),
+		temperature: cfg.temperature === undefined ? 0.8 : cfg.temperature
+	}
+	arr[index] = item
+	_setApiProfiles(arr)
+	return true
+}
+
+/** 删除第 index 套预设；index 越界返回 false */
+export function deleteApiProfile(index) {
+	index = parseInt(index, 10)
+	const arr = getApiProfiles()
+	if (!Number.isInteger(index) || index < 0 || index >= arr.length) return false
+	arr.splice(index, 1)
+	_setApiProfiles(arr)
+	return true
+}
+
+/** 读取第 index 套预设（含 baseUrl/apiKey/model/temperature），不存在返回 null */
+export function getApiProfile(index) {
+	index = parseInt(index, 10)
+	const p = getApiProfiles()[index]
+	if (!p) return null
+	return { baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, temperature: p.temperature }
 }
 
 // ---------- 聊天背景图片 ----------

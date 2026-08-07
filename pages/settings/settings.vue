@@ -24,6 +24,25 @@
 				<text class="label">温度 {{ s.temperature }}</text>
 				<slider :value="s.temperature" :min="0" :max="1.2" :step="0.1" activeColor="#5b7cfa" @change="onTemp" />
 			</view>
+			<view class="api-presets">
+				<view class="presets-head">
+					<text class="label">预设配置（最多 3 套）</text>
+					<view class="preset-save" @tap="saveAsPreset">保存当前为预设</view>
+				</view>
+				<view class="preset-slots">
+					<view
+						v-for="(p, i) in presetSlots"
+						:key="i"
+						class="preset-slot"
+						:class="{ filled: !!p, active: activePreset === i }"
+						@tap="applyPreset(i)"
+					>
+						<text class="preset-name">{{ p ? p.name : '预设' + (i + 1) + '（空）' }}</text>
+						<text v-if="p" class="preset-del" @tap.stop="deletePreset(i)">×</text>
+					</view>
+				</view>
+				<view class="presets-hint">点击预设快速填充下方配置，空槽位可点击「保存当前为预设」存入</view>
+			</view>
 		</view>
 
 		<view class="section">
@@ -143,7 +162,7 @@
 <script>
 	import { getSettings, saveSettings, clearConversation } from '../../utils/chat.js'
 	import { PERSONALITIES, PROVIDERS } from '../../utils/prompts.js'
-	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage } from '../../utils/storage.js'
+	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage, getApiProfiles, saveApiProfile, deleteApiProfile } from '../../utils/storage.js'
 	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
 
 	const TYPE_NAMES = { req: '请求', res: '响应', err: '错误', info: '信息' }
@@ -157,6 +176,8 @@
 				bg: getBackgroundImage(),
 				logs: getLogs(),
 				expandedId: '',
+				presets: getApiProfiles(),
+				activePreset: -1,
 				compressOptions: [
 					{ label: '关闭', value: 0 },
 					{ label: '20条', value: 20 },
@@ -177,12 +198,19 @@
 							backgroundRepeat: 'no-repeat'
 					  }
 					: {}
+			},
+			// 固定 3 个槽位，未保存的槽位为 null
+			presetSlots() {
+				const slots = []
+				for (let i = 0; i < 3; i++) slots.push(this.presets[i] || null)
+				return slots
 			}
 		},
 		onShow() {
 			this.s = getSettings()
 			this.bg = getBackgroundImage()
 			this.logs = getLogs()
+			this.presets = getApiProfiles()
 		},
 		methods: {
 			// ---- 调试日志 ----
@@ -224,6 +252,66 @@
 			applyProvider(p) {
 				this.s.baseUrl = p.url
 				this.s.model = p.model
+			},
+			// ---- API 配置预设 ----
+			applyPreset(i) {
+				const p = this.presets[i]
+				if (!p) return
+				this.s.baseUrl = p.baseUrl
+				this.s.apiKey = p.apiKey
+				this.s.model = p.model
+				if (typeof p.temperature === 'number') this.s.temperature = p.temperature
+				this.activePreset = i
+				uni.showToast({ title: '已应用预设「' + p.name + '」', icon: 'none' })
+			},
+			// 接口地址匹配到供应商预设时用供应商名做默认名，否则用"预设N"
+			defaultPresetName(i) {
+				const p = this.providers.find((x) => x.url === this.s.baseUrl)
+				return p ? p.name : '预设' + (i + 1)
+			},
+			saveAsPreset() {
+				if (!this.s.apiKey.trim()) {
+					uni.showToast({ title: '请先填写 API Key', icon: 'none' })
+					return
+				}
+				const itemList = []
+				for (let i = 0; i < 3; i++) {
+					const p = this.presets[i]
+					itemList.push((p ? '覆盖「' + p.name + '」' : '保存为预设' + (i + 1)) + '（' + (p ? p.model : '空槽') + '）')
+				}
+				uni.showActionSheet({
+					itemList,
+					success: (res) => {
+						const i = res.tapIndex
+						const name = this.presets[i] ? this.presets[i].name : this.defaultPresetName(i)
+						saveApiProfile(i, name, {
+							baseUrl: this.s.baseUrl,
+							apiKey: this.s.apiKey,
+							model: this.s.model,
+							temperature: this.s.temperature
+						})
+						this.presets = getApiProfiles()
+						this.activePreset = i
+						addLog('info', '保存API预设', `预设${i + 1}=${name} · model=${this.s.model}`)
+						uni.showToast({ title: '已保存预设' + (i + 1), icon: 'success' })
+					}
+				})
+			},
+			deletePreset(i) {
+				const p = this.presets[i]
+				if (!p) return
+				uni.showModal({
+					title: '删除预设',
+					content: '确定删除「' + p.name + '」吗？',
+					success: (res) => {
+						if (!res.confirm) return
+						deleteApiProfile(i)
+						this.presets = getApiProfiles()
+						if (this.activePreset === i) this.activePreset = -1
+						addLog('info', '删除API预设', p.name)
+						uni.showToast({ title: '已删除', icon: 'success' })
+					}
+				})
 			},
 			selectPersona(id) {
 				this.s.personalityId = id
@@ -391,6 +479,83 @@
 		font-size: 20rpx;
 		color: #999;
 		margin-top: 2rpx;
+	}
+
+	.api-presets {
+		margin-top: 24rpx;
+		padding: 20rpx 24rpx;
+		border-radius: 12rpx;
+		background: #f7f8fa;
+	}
+
+	.presets-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.preset-save {
+		font-size: 22rpx;
+		color: #5b7cfa;
+		padding: 6rpx 18rpx;
+		border: 1rpx solid #5b7cfa;
+		border-radius: 24rpx;
+	}
+
+	.preset-slots {
+		display: flex;
+		flex-wrap: wrap;
+		margin-top: 16rpx;
+	}
+
+	.preset-slot {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 170rpx;
+		padding: 12rpx 16rpx;
+		margin: 0 16rpx 12rpx 0;
+		border-radius: 12rpx;
+		border: 1rpx dashed #d5d7de;
+		background: #fff;
+	}
+
+	.preset-slot.filled {
+		border-style: solid;
+		border-color: #e5e6eb;
+	}
+
+	.preset-slot.active {
+		border-color: #5b7cfa;
+		background: #eef1fe;
+	}
+
+	.preset-name {
+		font-size: 24rpx;
+		color: #666;
+		max-width: 200rpx;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.preset-slot.filled .preset-name {
+		color: #333;
+	}
+
+	.preset-del {
+		margin-left: 10rpx;
+		font-size: 28rpx;
+		color: #f53f3f;
+		line-height: 1;
+		padding: 0 6rpx;
+	}
+
+	.presets-hint {
+		margin-top: 4rpx;
+		font-size: 22rpx;
+		color: #999;
+		line-height: 1.5;
 	}
 
 	.field {

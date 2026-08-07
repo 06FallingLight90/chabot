@@ -14,6 +14,10 @@
 			</view>
 			<view class="count">共 {{ memories.length }} 条</view>
 		</view>
+		<view class="conv-bar">
+			<text class="conv-label">当前对话</text>
+			<text class="conv-name">{{ convTitle }}</text>
+		</view>
 
 		<scroll-view scroll-y class="list">
 			<view v-if="!memories.length" class="empty">暂无记忆</view>
@@ -73,6 +77,7 @@
 
 <script>
 	import { memoryStore, maybeMaintenance } from '../../utils/chat.js'
+	import { getConversations, getActiveConversationId } from '../../utils/storage.js'
 	import { formatMemoryTime } from '../../utils/memory.js'
 
 	export default {
@@ -80,6 +85,7 @@
 			return {
 				level: '',
 				memories: [],
+				convTitle: '', // 当前会话标题（记忆按会话独立存储）
 				filters: [
 					{ label: '全部', value: '' },
 					{ label: 'L1 核心', value: 'L1' },
@@ -102,6 +108,8 @@
 			// 进入记忆页前先执行节流维护，保证列表反映最新清理结果
 			maybeMaintenance()
 			this.load()
+			const active = getConversations().find((c) => c.id === getActiveConversationId())
+			this.convTitle = active ? active.title : ''
 		},
 		methods: {
 			load() {
@@ -194,6 +202,28 @@
 	.count {
 		font-size: 24rpx;
 		color: #999;
+	}
+
+	.conv-bar {
+		display: flex;
+		align-items: center;
+		padding: 8rpx 30rpx 16rpx;
+		font-size: 22rpx;
+		color: #999;
+	}
+
+	.conv-label {
+		flex-shrink: 0;
+		color: #bbb;
+	}
+
+	.conv-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: #5b7cfa;
 	}
 
 	.list {

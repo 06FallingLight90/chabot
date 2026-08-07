@@ -26,9 +26,9 @@
 ├── pages/
 │   ├── chat/chat.vue      # 聊天页（背景图、消息列表、输入、会话历史/新对话/压缩入口）
 │   ├── memory/memory.vue  # 记忆页（筛选/编辑内容/优先级/级别/删除）
-│   └── settings/settings.vue  # 设置页（接口/人格/聊天背景/上下文压缩/数据管理/调试日志）
+│   └── settings/settings.vue  # 设置页（接口/API预设/人格/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
-│   ├── storage.js         # 跨端持久化层 + 设置项 + 背景图 + 多会话模型 + 情景历史
+│   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
 │   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 接口预设
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点）
@@ -42,6 +42,7 @@
 ### 记忆系统（utils/memory.js）
 
 - **三级记忆**：`L1` 核心事实（永不衰减，仅 L1+importance=5 永久）/ `L2` 情景记忆（慢衰减）/ `L3` 临时信息（快衰减）
+- **L2 职责 = 约定清单（TODO）**：提示词引导 LLM 将 L2 用作与用户的约定/待办维护，新约定立即新增、完成/取消/变化立即修改/删除；**L3 快速迭代**：近期琐事与临时状态，过时立即修改或删除旧项
 - **importance 1-5**，半衰期表 `HALF_LIFE`（L1: 7~∞ / L2: 3~60 / L3: 1~3 天）
 - **有效重要性** = 基础分 × 半衰期时间衰减 × 回忆强化因子（`effectiveImportance`）
 - **LLM 驱动写入**：system prompt 内置 `MEMORY_GUIDE`（prompts.js），回复中的 `Memory:` 行经 `saveFromLine` 解析入库。支持三种操作：**新增**（类别 内容）/**修改**（修改 原内容 → 新内容）/**删除**（删除 原内容），修改/删除按内容逐字匹配。找不到匹配则静默忽略。
@@ -61,11 +62,13 @@
 - 聊天背景图：App/小程序 `uni.saveFile` 持久化到文件；H5 用 **canvas 压缩**（限宽 1080px、JPEG 0.8）转 base64，避免 localStorage 配额超限
 - **多会话模型**：对话存于 `chabot_conversations`（`[{id, title, created_at, updated_at, summary, compressedUntil, messages}]`）+ `chabot_active_conv`（当前会话 id）；`getChatRows()` 返回当前会话 messages 的**活引用**；旧版 `chabot_chat_history` 首次启动自动迁移为第一个会话，此后不再写入
 - **情景历史**：情景（key `scene`）存为最多 10 条字符串数组（FIFO，`getSceneHistory()`），`getScene()` 返回最新一条；相同情景不重复记录，空值清除全部
+- **API 配置预设**：`chabot_setting_api_profiles` 存至多 3 套 `{id,name,baseUrl,apiKey,model,temperature}`，`saveApiProfile(i,name,cfg)`（越界拒绝、覆盖保留 id）/ `deleteApiProfile(i)` / `getApiProfile(i)` 供设置页快速填充与切换
 
 ### 会话管理（utils/chat.js + storage.js）
 
 - **开始新对话** `startNewConversation`：当前会话非空则归档新建，为空则重置复用
 - **历史弹窗**（聊天页头部「历史」）：`listConversations` 按更新时间倒序返回标题/预览；`openConversation` 切换当前会话；`removeConversation` 删除（删除当前会话自动切到最近一个）
+- **复制**：`copyConversationToNew` 复制当前会话（消息+记忆+概要+人格+情景，标题加"副本"）到新会话并切换；`copyMemoriesToNew` 仅复制记忆+人格快照
 - 会话标题自动取首条用户消息（≤16 字）；清空对话仅清当前会话，会话本身保留
 
 ### 聊天链路（utils/chat.js）
@@ -82,13 +85,13 @@
 ### 调试日志（utils/log.js）
 
 - 环形缓冲 200 条（`MAX_LOGS`），单条详情上限 30000 字符（`MAX_DETAIL_CHARS`）防存储膨胀；`addLog(type, msg, detail)`，type：`req`/`res`/`err`/`info`
-- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作、压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）
+- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作、压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）、保存/删除 API 预设
 - **设置页调试面板**：类型徽章（请求蓝/响应绿/错误红/信息灰）+ 摘要 + 时间，点击条目展开完整详情（收起态 JS 截断前 200 字符预览，不用 CSS line-clamp，兼容性可靠）；支持刷新与一键清空
 
 ### 当前情景（Scene）
 
 - LLM 每次回复输出 `Scene: 情景描述`（≤40字），结合注入的当前时间判断"用户此刻在做什么"
-- 持久化于 storage（key `scene`，最多 10 条 FIFO 历史），聊天页顶部情景条展示，点击弹窗可查看/修改/清除
+- 持久化于 storage（随会话独立的 `scenes` 数组，最多 10 条 FIFO 历史），聊天页顶部情景条展示，点击弹窗可查看/修改/清除
 - 编辑弹窗内展示最近 10 条历史情景（最新在前），点击条目填入编辑框复用
 - `buildSystemPrompt` 注入「用户当前情景」+「情景变化」序列，帮助 LLM 理解情景过渡、衔接更流畅
 - 提示词见 `prompts.js` 的 `SCENE_GUIDE` 与 `buildNowText`

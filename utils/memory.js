@@ -108,6 +108,12 @@ export class MemoryStore {
 		return getMemories()
 	}
 
+	/** 切换会话时重置召回冷却等会话内状态，避免跨会话泄漏 */
+	resetState() {
+		this._recallTimes.clear()
+		this._recentlyBlocked = []
+	}
+
 	_halfLife(row) {
 		const map = HALF_LIFE[row.level] || HALF_LIFE.L2
 		const v = map[row.importance]
