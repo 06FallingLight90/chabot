@@ -57,7 +57,10 @@ export async function chatCompletion(opts) {
 				model,
 				messages,
 				temperature,
-				max_tokens: maxTokens
+				max_tokens: maxTokens,
+				// 显式关闭流式：OpenAI 默认非流式，但 Ollama 等兼容接口默认 stream=true（SSE），
+				// 本客户端按非流式 JSON 解析，必须强制 stream=false，否则返回流式数据解析不出内容
+				stream: false
 			}
 		})
 	} catch (e) {
@@ -77,8 +80,14 @@ export async function chatCompletion(opts) {
 			)
 			return { text: choice.message.content }
 		}
-		addLog('err', 'LLM 响应格式异常', _preview(JSON.stringify(res.data || {}), 120))
-		throw new Error('接口返回格式异常')
+		let raw = ''
+		try {
+			raw = typeof res.data === 'string' ? res.data : JSON.stringify(res.data || {}, null, 1)
+		} catch (e) {
+			raw = String(res.data || '')
+		}
+		addLog('err', 'LLM 响应格式异常', `status=${res.statusCode}\n${raw.slice(0, 500)}`)
+		throw new Error('接口返回格式异常（详情见调试日志）')
 	}
 
 	const err = (res.data && res.data.error) || {}

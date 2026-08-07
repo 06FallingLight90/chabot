@@ -31,7 +31,7 @@
 │   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
 │   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 接口预设
-│   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点）
+│   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，显式 stream:false）
 │   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
 │   └── chat.js            # 聊天服务编排（导出 memoryStore 单例 + 会话管理 + 上下文压缩）
 └── scripts/test-memory.mjs  # 核心逻辑断言测试
@@ -120,3 +120,10 @@
 | 图片压缩 | uni.compressImage | canvas 压缩 | uni.compressImage |
 | 图片持久化 | uni.saveFile | base64 | uni.saveFile |
 | LLM 请求 | uni.request | uni.request | uni.request（需配置合法域名） |
+
+## Ollama 本地模型接入
+
+- **协议差异**：Ollama 的 `/v1/chat/completions` 兼容接口默认 `stream=true`（SSE 流式），OpenAI 官方默认非流式。客户端在 `llm.js` 请求体**显式传 `stream:false`** 强制非流式，按标准 JSON 解析（`choices[0].message.content`），无需实现流式解析
+- **局域网访问**：手机访问电脑上的 Ollama 需三件事——① 电脑设置环境变量 `OLLAMA_HOST=0.0.0.0` 后重启 Ollama；② Windows 防火墙放行 11434 端口；③ 设置页接口地址填 `http://<电脑局域网IP>:11434/v1`（设置页已有「Ollama(本地)」预设，点击后改 IP 即可）
+- **模型名**：须与 `ollama list` 中的实际模型名一致（如 `llama3.2:latest`），填错会返回 404；API Key 可随意填（Ollama 不校验）
+- **排查**：设置页调试日志中「响应格式异常」条目现在会附实际响应体全文，可据此确认返回的是 SSE 流式数据还是 model not found

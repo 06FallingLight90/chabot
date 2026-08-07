@@ -14,6 +14,9 @@
 - **记忆指南层级化**：`MEMORY_GUIDE` 由"触发条件"改为按 L1/L2/L3 分层说明用途与维护频率；修改/删除操作优先级高于新增
 - **版本号升级**：`manifest.json` 1.0.6 → 1.0.7
 
+### 修复
+- **Ollama 本地模型无返回**：Ollama 的 `/v1/chat/completions` 兼容接口默认 `stream=true`（SSE 流式），与 OpenAI 默认非流式不同，导致 App 按非流式 JSON 解析不到内容。现请求体显式传 `stream:false`，强制 Ollama 返回标准 JSON，无需 App 支持流式解析；接口预设新增「Ollama(本地)」一键填入，响应格式异常日志附实际响应体便于排查
+
 ## 2026-08-05
 
 ### 新增

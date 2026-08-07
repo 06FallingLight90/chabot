@@ -122,6 +122,8 @@ export function getPersonaName(id) {
 /** 常见兼容 OpenAI 协议的接口预设（供设置页快速填充） */
 export const PROVIDERS = [
 	{ id: 'openai', name: 'OpenAI', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+	// Ollama 本地模型：手机访问需把 localhost 换成电脑局域网 IP，且需 OLLAMA_HOST=0.0.0.0 监听局域网
+	{ id: 'ollama', name: 'Ollama(本地)', url: 'http://localhost:11434/v1', model: 'llama3.2' },
 	{ id: 'deepseek', name: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
 	{ id: 'zhipu', name: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
 	{ id: 'qwen', name: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-turbo' },

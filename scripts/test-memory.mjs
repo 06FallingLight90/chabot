@@ -124,6 +124,7 @@ const sys = captured.data.messages[0]
 assert(sys.role === 'system' && sys.content.includes('[记忆]'), 'system 包含记忆指南')
 assert(sys.content.includes('[情景]') && sys.content.includes('当前时间'), 'system 包含情景指南与时间')
 assert(captured.data.messages[captured.data.messages.length - 1].content === '你好', '末尾为用户消息')
+assert(captured.data.stream === false, '请求显式关闭流式（兼容 Ollama 默认流式）')
 assert(kv.get('chabot_conversations')[0].messages.length === 2, '对话落库 2 条（存于会话）')
 assert(chat.listConversations()[0].title === '你好', '会话标题取首条用户消息')
 // chat.memoryStore 与 ms 共享底层存储 _memories，sendMessage 解析出新记忆
