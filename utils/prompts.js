@@ -20,7 +20,7 @@ importance: 5=核心身份 4=重要 3=中长期 2=临时 1=闲聊
 错误: Memory: user_fact: 用户叫小明            ← 类别后多了冒号
 正确: Memory: user_fact 用户叫小明 | keywords:小明 | importance:5 | level:L1`
 
-export const SCENE_GUIDE = `[情景] 回复时在 Memory 行之前输出 Scene 行：Scene: 中性记录此刻情境，谁在哪做什么，≤30字。格式严格 Scene: 开头后接一句陈述，不要加引号或多余符号。严禁文学化描述。`
+export const SCENE_GUIDE = `[情景] 回复时在 Memory 行之前输出 Scene 行：Scene: 中性记录此刻情境，谁在哪做什么，≤30字。格式严格 Scene: 开头后接一句陈述，不要加引号或多余符号。严禁文学化描述。若没有情景变化（比如用户在相同地点做相同事件），不输出 Scene 行。`
 
 /** 通用对话规则：与人格提示词一起注入 system */
 const CHAT_GUIDE = `[对话规则]

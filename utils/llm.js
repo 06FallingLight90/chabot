@@ -34,18 +34,64 @@ function _reqDetail(url, messages) {
 }
 
 /**
+ * 兜底解析 SSE 流式文本（data: {...} 逐行）。某些兼容服务（如个别 Ollama 配置）
+ * 可能无视 stream:false 仍返回流式，本客户端按非流式解析会拿不到内容，这里尝试
+ * 逐行合并增量 content，兼容 choices[0].delta.content / choices[0].message.content /
+ * Ollama 原生 message.content 三种字段。
+ * @param {*} data 响应 data（字符串或对象）
+ * @returns {string} 合并后的完整文本，无流式内容则返回空串
+ */
+function _parseStreamingText(data) {
+	const text = typeof data === 'string' ? data : data && typeof data === 'object' ? '' : String(data || '')
+	if (!text) return ''
+	let out = ''
+	for (const line of text.split('\n')) {
+		const m = line.match(/^data:\s*(.*)$/)
+		if (!m) continue
+		const payload = m[1].trim()
+		if (!payload || payload === '[DONE]') continue
+		try {
+			const obj = JSON.parse(payload)
+			if (obj && obj.choices && obj.choices[0]) {
+				const chunk = obj.choices[0].delta || obj.choices[0].message || {}
+				if (typeof chunk.content === 'string') out += chunk.content
+			} else if (obj && obj.message && typeof obj.message.content === 'string') {
+				out += obj.message.content
+			}
+		} catch (e) {
+			/* 非 JSON 行忽略 */
+		}
+	}
+	return out
+}
+
+/**
  * 发起一次对话补全
- * @param {{baseUrl:string, apiKey:string, model:string, messages:Array, temperature?:number, maxTokens?:number}} opts
+ * @param {{baseUrl:string, apiKey:string, model:string, messages:Array, temperature?:number, maxTokens?:number, reasoningEffort?:string}} opts
+ *        reasoningEffort: 'none' 关闭思考 / 'high'|'medium'|'low' 开启思考 / '' 跟随模型。
+ *        Ollama 兼容接口经 reasoning_effort 控制 Qwen3 等思考模型的思考模式；原生 think 参数在该端点不生效。
  * @returns {Promise<{text:string}>}
  */
 export async function chatCompletion(opts) {
-	const { baseUrl, apiKey, model, messages, temperature = 0.8, maxTokens = 1024 } = opts
+	const { baseUrl, apiKey, model, messages, temperature = 0.8, maxTokens = 1024, reasoningEffort } = opts
 	const url = (baseUrl || '').replace(/\/+$/, '') + '/chat/completions'
 	addLog('req', `LLM 请求 ${model}`, _reqDetail(url, messages))
 
-	let res
-	try {
-		res = await uniRequest({
+	const buildData = (withReasoning) => {
+		const data = {
+			model,
+			messages,
+			temperature,
+			max_tokens: maxTokens,
+			// 显式关闭流式：OpenAI 默认非流式，但 Ollama 等兼容接口默认 stream=true（SSE），
+			// 本客户端按非流式 JSON 解析，必须强制 stream=false，否则返回流式数据解析不出内容
+			stream: false
+		}
+		if (withReasoning && reasoningEffort) data.reasoning_effort = reasoningEffort
+		return data
+	}
+	const doRequest = (data) =>
+		uniRequest({
 			url,
 			method: 'POST',
 			timeout: 120000,
@@ -53,16 +99,17 @@ export async function chatCompletion(opts) {
 				'Content-Type': 'application/json',
 				Authorization: 'Bearer ' + apiKey
 			},
-			data: {
-				model,
-				messages,
-				temperature,
-				max_tokens: maxTokens,
-				// 显式关闭流式：OpenAI 默认非流式，但 Ollama 等兼容接口默认 stream=true（SSE），
-				// 本客户端按非流式 JSON 解析，必须强制 stream=false，否则返回流式数据解析不出内容
-				stream: false
-			}
+			data
 		})
+
+	let res
+	try {
+		res = await doRequest(buildData(true))
+		// 服务端不识别 reasoning_effort（如部分 OpenAI 兼容服务）会返回 400，移除该参数后降级重试一次
+		if (res.statusCode === 400 && reasoningEffort) {
+			addLog('info', '思考参数降级', '服务端返回 400，移除 reasoning_effort 后重试')
+			res = await doRequest(buildData(false))
+		}
 	} catch (e) {
 		addLog('err', 'LLM 网络错误', e.message)
 		throw new Error('网络错误：' + e.message)
@@ -71,14 +118,37 @@ export async function chatCompletion(opts) {
 	if (res.statusCode >= 200 && res.statusCode < 300) {
 		const data = res.data || {}
 		const choice = data.choices && data.choices[0]
-		if (choice && choice.message && typeof choice.message.content === 'string') {
-			const usage = data.usage && data.usage.total_tokens ? ` · tokens: ${data.usage.total_tokens}` : ''
+		let content = choice && choice.message ? choice.message.content : undefined
+		// 思考型模型（Qwen3 等）可能把全部输出放进 reasoning/thinking 字段而 content 为空，
+		// 此时兜底展示思考内容，避免"请求成功却无返回"的假象
+		let fromReasoning = false
+		if ((typeof content !== 'string' || !content.trim()) && choice && choice.message) {
+			const r = choice.message.reasoning || choice.message.thinking
+			if (r) {
+				content = r
+				fromReasoning = true
+			}
+		}
+		if (typeof content === 'string') {
+			const usage = data.usage
+			? ` · prompt:${data.usage.prompt_tokens ?? '-'} completion:${data.usage.completion_tokens ?? '-'} total:${data.usage.total_tokens ?? '-'}`
+			: ''
 			addLog(
 				'res',
-				`LLM 响应 200`,
-				`model=${model}${usage}\n--- 返回内容 ---\n${choice.message.content}\n--- 概要预览 ---\n${_preview(choice.message.content)}`
+				`LLM 响应 200${fromReasoning ? '（思考内容）' : ''}`,
+				`model=${model}${usage}\n--- 返回内容 ---\n${content}\n--- 概要预览 ---\n${_preview(content)}`
 			)
-			return { text: choice.message.content }
+			return { text: content }
+		}
+		// 兜底：个别兼容服务无视 stream:false 仍返回 SSE 流式，逐行合并增量内容
+		const streamText = _parseStreamingText(res.data)
+		if (streamText) {
+			addLog(
+				'res',
+				`LLM 响应 200（流式兼容）`,
+				`model=${model}\n--- 返回内容 ---\n${streamText}\n--- 概要预览 ---\n${_preview(streamText)}`
+			)
+			return { text: streamText }
 		}
 		let raw = ''
 		try {

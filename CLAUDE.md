@@ -26,12 +26,12 @@
 ├── pages/
 │   ├── chat/chat.vue      # 聊天页（背景图、消息列表、输入、会话历史/新对话/压缩入口）
 │   ├── memory/memory.vue  # 记忆页（筛选/编辑内容/优先级/级别/删除）
-│   └── settings/settings.vue  # 设置页（接口/API预设/人格/聊天背景/上下文压缩/数据管理/调试日志）
+│   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/人格/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
 │   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
 │   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 接口预设
-│   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，显式 stream:false）
+│   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，stream:false + reasoning_effort 思考控制）
 │   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
 │   └── chat.js            # 聊天服务编排（导出 memoryStore 单例 + 会话管理 + 上下文压缩）
 └── scripts/test-memory.mjs  # 核心逻辑断言测试
@@ -69,11 +69,12 @@
 - **开始新对话** `startNewConversation`：当前会话非空则归档新建，为空则重置复用
 - **历史弹窗**（聊天页头部「历史」）：`listConversations` 按更新时间倒序返回标题/预览；`openConversation` 切换当前会话；`removeConversation` 删除（删除当前会话自动切到最近一个）
 - **复制**：`copyConversationToNew` 复制当前会话（消息+记忆+概要+人格+情景，标题加"副本"）到新会话并切换；`copyMemoriesToNew` 仅复制记忆+人格快照
+- **会话独立人格**：每个会话 `personality` 快照独立；`saveConversationPersonality(personalityId, customPrompt)` 写入当前会话快照（timeMode 沿用会话生效值），不影响全局与其他会话；未快照的会话回退全局人格（`getConversationSettings`）
 - 会话标题自动取首条用户消息（≤16 字）；清空对话仅清当前会话，会话本身保留
 
 ### 聊天链路（utils/chat.js）
 
-`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「压缩概要（如有）+ 未压缩历史（最近 15 条）」→ 调 LLM → 落库对话 → 解析 `Scene:` 行更新当前情景、`Memory:` 行入库，均从展示文本剔除 → 执行维护 → 异步检查自动压缩（`maybeCompress`）
+`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → 落库对话 → 解析 `Scene:` 行更新当前情景、`Memory:` 行入库，均从展示文本剔除 → 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
 
 ### 上下文压缩（utils/chat.js）
 
@@ -100,7 +101,7 @@
 ### 聊天页 UI
 
 - 背景图固定于 scroll-view 可视区（cover 铺满，不随内容拉伸/滚动）
-- 头部「历史 / 新对话 / 清空」：历史弹窗切换/删除会话；压缩按钮位于历史弹窗内
+- 头部「人格名（点击设置）/ 历史 / 新对话 / 清空」：人格名点击弹出「当前对话人格」设置（预置 4 款 + 自定义提示词，保存写入会话快照）；历史弹窗切换/删除会话；压缩按钮位于历史弹窗内
 - **一键回到底部**：右下角浮动按钮，仅当用户上翻离开底部时出现（`@scroll` 的 `scrollTop` 差值 + `@touchmove` 方向兜底，隐藏靠 `@scrolltolower`/发消息回底）；滚动采用「先清空再设置 `scrollInto`」以强制触发
 - 侧边滑块：聊天记录 >15 条时出现，按住滑块按比例定位到对应消息（scroll-into-view 到 `msg-N` 锚点）
 - 场景编辑弹窗与历史弹窗、记忆页共用 mask/panel 样式
@@ -123,7 +124,8 @@
 
 ## Ollama 本地模型接入
 
-- **协议差异**：Ollama 的 `/v1/chat/completions` 兼容接口默认 `stream=true`（SSE 流式），OpenAI 官方默认非流式。客户端在 `llm.js` 请求体**显式传 `stream:false`** 强制非流式，按标准 JSON 解析（`choices[0].message.content`），无需实现流式解析
+- **协议差异**：Ollama 的 `/v1/chat/completions` 兼容接口默认 `stream=true`（SSE 流式），OpenAI 官方默认非流式。客户端在 `llm.js` 请求体**显式传 `stream:false`** 强制非流式，按标准 JSON 解析（`choices[0].message.content`），无需实现流式解析；若个别服务仍返回流式，`_parseStreamingText` 兜底逐行合并增量内容
+- **思考模式（Qwen3 等）**：Ollama 兼容接口对思考型模型未指定参数时**自动开启思考**，且思考+回答全部写入 `message.reasoning`/`thinking`、`content` 为空——这是"请求成功但无返回"的根因。控制方式：请求体顶层传 `reasoning_effort`（`none` 关闭 / `high`|`medium`|`low` 开启，原生 `think` 参数在该端点不生效）。本 App 三层保障：① 设置项 `reasoningEffort`（设置页「思考模式」，默认 `none`），`chat.js` 透传给 `chatCompletion`（压缩任务固定 `none`）；② 服务端不识别该参数返回 400 时自动移除参数降级重试一次；③ 解析兜底：`content` 为空时读取 `reasoning`/`thinking` 字段展示
 - **局域网访问**：手机访问电脑上的 Ollama 需三件事——① 电脑设置环境变量 `OLLAMA_HOST=0.0.0.0` 后重启 Ollama；② Windows 防火墙放行 11434 端口；③ 设置页接口地址填 `http://<电脑局域网IP>:11434/v1`（设置页已有「Ollama(本地)」预设，点击后改 IP 即可）
 - **模型名**：须与 `ollama list` 中的实际模型名一致（如 `llama3.2:latest`），填错会返回 404；API Key 可随意填（Ollama 不校验）
 - **排查**：设置页调试日志中「响应格式异常」条目现在会附实际响应体全文，可据此确认返回的是 SSE 流式数据还是 model not found

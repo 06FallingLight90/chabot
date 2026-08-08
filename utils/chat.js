@@ -76,6 +76,7 @@ export function getSettings() {
 		apiKey: getSetting('apiKey', ''),
 		model: getSetting('model', 'gpt-4o-mini'),
 		temperature: parseFloat(getSetting('temperature', '0.8')),
+		reasoningEffort: getSetting('reasoningEffort', 'none'), // 思考模式：none 关闭 / high 开启 / '' 跟随模型（Ollama 等兼容接口经 reasoning_effort 控制）
 		personalityId,
 		customPrompt: getSetting('customPrompt', ''),
 		timeMode: getSetting('timeMode', 'real'), // 情景时间模式：real 现实时间 / virtual 虚拟时间
@@ -90,6 +91,7 @@ export function saveSettings(s) {
 	setSetting('apiKey', (s.apiKey || '').trim())
 	setSetting('model', (s.model || '').trim())
 	setSetting('temperature', String(s.temperature))
+	setSetting('reasoningEffort', s.reasoningEffort || '')
 	setSetting('personalityId', s.personalityId)
 	setSetting('customPrompt', s.customPrompt || '')
 	setSetting('timeMode', s.timeMode === 'virtual' ? 'virtual' : 'real')
@@ -123,6 +125,20 @@ function snapshotPersonality() {
 		customPrompt: s.customPrompt || '',
 		timeMode: s.timeMode
 	})
+}
+
+/**
+ * 保存当前会话的人格设置（写入会话快照，仅作用于当前对话，不影响全局与其他会话）。
+ * timeMode 沿用当前会话生效的模式，保持会话内的情景时间设置不漂移。
+ */
+export function saveConversationPersonality(personalityId, customPrompt) {
+	const s = getConversationSettings()
+	setConversationPersonality({
+		personalityId,
+		customPrompt: personalityId === 'custom' ? (customPrompt || '') : '',
+		timeMode: s.timeMode
+	})
+	addLog('info', '会话人格', `${getPersonaName(personalityId)}${personalityId === 'custom' ? '（自定义）' : ''}`)
 }
 
 /** 聊天页历史（返回副本，避免 UI 直接改坏存储数组） */
@@ -267,7 +283,8 @@ export async function compressContext(force = false) {
 					{ role: 'user', content: text }
 				],
 				temperature: 0.3,
-				maxTokens: 512
+				maxTokens: 512,
+				reasoningEffort: 'none' // 压缩任务简单，固定关闭思考，避免被思考 token 占满
 			})
 			const out = (resp.text || '').trim()
 			if (!out) return false
@@ -330,10 +347,13 @@ export async function sendMessage(userText) {
 		conv.timeMode === 'virtual' ? '' : buildNowText()
 	)
 
-	// 3. 组装 messages：system + 压缩概要 + 未压缩历史 + 当前用户消息
-	const messages = [{ role: 'system', content: system }]
+	// 3. 组装 messages：system + 未压缩历史 + 当前用户消息
+	// 压缩概要并入首条 system 末尾，避免出现第二条 system 消息——Ollama 等模板要求
+	// system 必须在 messages 最前且只能一条，多条 system 会抛 "System message must be at the beginning"
 	const { summary, compressedUntil } = getConversationCompression()
-	if (summary) messages.push({ role: 'system', content: '此前对话概要：' + summary })
+	const messages = [
+		{ role: 'system', content: summary ? `${system}\n\n此前对话概要：${summary}` : system }
+	]
 	for (const h of getChatRows().slice(compressedUntil).slice(-HISTORY_ENTRIES)) {
 		messages.push({ role: h.role, content: h.content })
 	}
@@ -345,7 +365,8 @@ export async function sendMessage(userText) {
 		apiKey: s.apiKey,
 		model: s.model,
 		messages,
-		temperature: s.temperature
+		temperature: s.temperature,
+		reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
 	})
 
 	// 5. 落库对话
@@ -376,7 +397,17 @@ export async function sendMessage(userText) {
 		addLog('info', '情景更新', newScene)
 	}
 	if (saved > 0) addLog('info', `记忆入库 ${saved} 条`)
-	const cleanReply = cleanLines.join('\n').trim()
+	let cleanReply = cleanLines.join('\n').trim()
+	// 原始回复非空但清理后为空：模型只输出了 Scene/Memory 结构化标记行，未生成对话内容。
+	// 明确提示用户，避免显示空白/省略号造成困惑（本地小模型可能出现此情况）。
+	if (!cleanReply && reply.text && reply.text.trim()) {
+		addLog(
+			'info',
+			'回复内容为空',
+			`模型仅输出了 ${saved} 条记忆/${newScene ? '1' : '0'} 条情景标记，未生成对话文本\n--- 原始返回 ---\n${reply.text}`
+		)
+		cleanReply = '（模型仅输出了记忆/情景标记，未生成对话内容）'
+	}
 
 	// 7. 定期维护（L3 过期清理 / 降级 / 容量控制）
 	memoryStore.maintenance()

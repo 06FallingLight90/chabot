@@ -24,6 +24,19 @@
 				<text class="label">温度 {{ s.temperature }}</text>
 				<slider :value="s.temperature" :min="0" :max="1.2" :step="0.1" activeColor="#5b7cfa" @change="onTemp" />
 			</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">思考模式</text>
+					<view class="mode-btns">
+						<view class="mode-btn" :class="{ on: s.reasoningEffort === 'none' }" @tap="s.reasoningEffort = 'none'">关闭</view>
+						<view class="mode-btn" :class="{ on: s.reasoningEffort === 'high' }" @tap="s.reasoningEffort = 'high'">开启</view>
+						<view class="mode-btn" :class="{ on: s.reasoningEffort === '' }" @tap="s.reasoningEffort = ''">跟随模型</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">
+					Ollama 本地思考模型（如 Qwen3）默认思考会占满输出 token 导致回复为空，建议关闭；开启仅对思考型模型生效，其他模型自动忽略。
+				</view>
+			</view>
 			<view class="api-presets">
 				<view class="presets-head">
 					<text class="label">预设配置（最多 3 套）</text>

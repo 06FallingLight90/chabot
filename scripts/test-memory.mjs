@@ -213,6 +213,9 @@ globalThis.uni.request = (opts) => {
 }
 await chat.sendMessage('压缩后继续聊')
 assert(captured.data.messages.some((m) => m.role === 'system' && m.content.includes('此前对话概要')), '后续请求注入压缩概要')
+const sysCount = captured.data.messages.filter((m) => m.role === 'system').length
+assert(sysCount === 1, '仅一条 system 消息（概要已并入首条）')
+assert(captured.data.messages[0].role === 'system', 'system 位于消息最前（Ollama 模板要求）')
 const sentAll = captured.data.messages.map((m) => m.content).join('\n')
 assert(!sentAll.includes('压缩测试消息0'), '被压缩的早期消息不再发送')
 assert(!sentAll.includes('你好'), '更早的原始消息不再发送')
@@ -299,6 +302,114 @@ assert(storage.deleteApiProfile(9) === false, '越界删除被拒绝')
 const apply = storage.getApiProfile(0)
 chat.saveSettings({ ...chat.getSettings(), ...apply })
 assert(chat.getSettings().model === 'deepseek-chat', '应用预设后全局设置已切换')
+
+console.log('\n[14] SSE 流式响应兜底解析（兼容 Ollama 无视 stream:false）')
+const llm = await import('../utils/llm.js')
+// OpenAI 兼容流式：choices[].delta.content 增量
+const sseBody = [
+	'data: {"choices":[{"delta":{"role":"assistant","content":"你好"}}]}',
+	'data: {"choices":[{"delta":{"content":"呀"}}]}',
+	'data: {"choices":[{"delta":{"content":"，今天怎么样"}}]}',
+	'data: [DONE]'
+].join('\n')
+globalThis.uni.request = (opts) => {
+	opts.success({ statusCode: 200, data: sseBody })
+}
+let st = await llm.chatCompletion({
+	baseUrl: 'http://192.168.1.10:11434/v1',
+	apiKey: 'x',
+	model: 'llama3.2',
+	messages: [{ role: 'user', content: 'hi' }]
+})
+assert(st.text === '你好呀，今天怎么样', `流式增量已合并（实际：${st.text}）`)
+// Ollama 原生流式：message.content 增量
+const sseBody2 = ['data: {"message":{"role":"assistant","content":"嗨"}}', 'data: {"message":{"role":"assistant","content":"！"}}', 'data: {"done":true}'].join('\n')
+globalThis.uni.request = (opts) => {
+	opts.success({ statusCode: 200, data: sseBody2 })
+}
+st = await llm.chatCompletion({
+	baseUrl: 'http://192.168.1.10:11434/v1',
+	apiKey: 'x',
+	model: 'llama3.2',
+	messages: [{ role: 'user', content: 'hi' }]
+})
+assert(st.text === '嗨！', 'Ollama 原生流式格式兼容')
+
+console.log('\n[15] 思考模式（reasoning_effort）与思考内容兜底')
+let cap15 = null
+// 请求携带 reasoning_effort:none
+globalThis.uni.request = (opts) => {
+	cap15 = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { role: 'assistant', content: '正常回答' } }] } })
+}
+st = await llm.chatCompletion({
+	baseUrl: 'http://192.168.1.10:11434/v1',
+	apiKey: 'x',
+	model: 'qwen3.5:9b',
+	messages: [{ role: 'user', content: 'hi' }],
+	reasoningEffort: 'none'
+})
+assert(cap15.data.reasoning_effort === 'none', '请求携带 reasoning_effort:none')
+// content 为空、reasoning 有值 → 兜底展示思考内容（Qwen3.5 的典型表现）
+globalThis.uni.request = (opts) => {
+	opts.success({
+		statusCode: 200,
+		data: { choices: [{ message: { role: 'assistant', content: '', reasoning: '思考过程…' } }] }
+	})
+}
+st = await llm.chatCompletion({
+	baseUrl: 'http://x/v1',
+	apiKey: 'x',
+	model: 'qwen3.5:9b',
+	messages: [{ role: 'user', content: 'hi' }]
+})
+assert(st.text === '思考过程…', `content 为空时兜底读取 reasoning（实际：${st.text}）`)
+// thinking 字段同样兜底
+globalThis.uni.request = (opts) => {
+	opts.success({
+		statusCode: 200,
+		data: { choices: [{ message: { role: 'assistant', content: '', thinking: '推理A' } }] }
+	})
+}
+st = await llm.chatCompletion({
+	baseUrl: 'http://x/v1',
+	apiKey: 'x',
+	model: 'qwen3.5:9b',
+	messages: [{ role: 'user', content: 'hi' }]
+})
+assert(st.text === '推理A', 'thinking 字段兜底')
+// 服务端不识别 reasoning_effort → 400 降级重试（移除参数）
+let firstCall = true
+globalThis.uni.request = (opts) => {
+	if (firstCall) {
+		firstCall = false
+		opts.success({ statusCode: 400, data: { error: { message: 'Unrecognized request argument: reasoning_effort' } } })
+		return
+	}
+	cap15 = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '降级成功' } }] } })
+}
+st = await llm.chatCompletion({
+	baseUrl: 'https://api.openai.com/v1',
+	apiKey: 'sk',
+	model: 'gpt-4o',
+	messages: [{ role: 'user', content: 'hi' }],
+	reasoningEffort: 'none'
+})
+assert(st.text === '降级成功', '400 后移除 reasoning_effort 降级重试成功')
+assert(!('reasoning_effort' in cap15.data), '重试请求不再携带 reasoning_effort')
+
+console.log('\n[16] 会话独立人格设置（仅作用于当前对话）')
+chat.saveConversationPersonality('koishi', '')
+assert(chat.getConversationSettings().personalityId === 'koishi', '当前会话人格已改为 koishi')
+assert(chat.getSettings().personalityId === 'gentle', '全局人格不受影响')
+chat.startNewConversation()
+assert(chat.getConversationSettings().personalityId === 'gentle', '新会话回退全局人格')
+chat.saveConversationPersonality('custom', '你是暗夜精灵')
+assert(chat.getConversationSettings().personalityId === 'custom', '自定义人格已选中')
+assert(chat.getConversationSettings().customPrompt === '你是暗夜精灵', '自定义提示词已保存')
+assert(chat.openConversation(firstId), '切回第一个会话')
+assert(chat.getConversationSettings().personalityId === 'gentle', '第一个会话人格独立保留（不受其他会话影响）')
 
 console.log('\n================================')
 if (failed === 0) {

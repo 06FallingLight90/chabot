@@ -2,7 +2,7 @@
 	<view class="page">
 		<view class="header">
 			<view class="header-left">
-				<text class="persona">{{ personaName }}</text>
+				<text class="persona" @tap="openPersona">{{ personaName }}</text>
 				<text class="model">{{ model }}</text>
 			</view>
 			<view class="header-right">
@@ -141,6 +141,45 @@
 				<button class="edit-btn cancel" @tap="closeHistory">关闭</button>
 			</view>
 		</view>
+
+		<!-- 会话人格设置弹窗 -->
+		<view v-if="showPersona" class="mask" @tap="closePersona">
+			<view class="persona-panel" @tap.stop>
+				<view class="edit-title">当前对话人格</view>
+				<view class="persona-hint">仅作用于当前对话，不影响其他对话与全局设置</view>
+				<scroll-view scroll-y class="persona-list">
+					<view
+						v-for="p in personalities"
+						:key="p.id"
+						class="persona-item"
+						:class="{ active: personaDraftId === p.id }"
+						@tap="pickPersona(p.id)"
+					>
+						<view class="persona-item-name">{{ p.name }}</view>
+						<view class="persona-item-desc">{{ p.desc }}</view>
+					</view>
+					<view
+						class="persona-item"
+						:class="{ active: personaDraftId === 'custom' }"
+						@tap="pickPersona('custom')"
+					>
+						<view class="persona-item-name">自定义</view>
+						<view class="persona-item-desc">手写专属人格提示词</view>
+					</view>
+				</scroll-view>
+				<textarea
+					v-if="personaDraftId === 'custom'"
+					class="persona-custom"
+					v-model="personaDraftPrompt"
+					maxlength="5000"
+					placeholder="在这里输入完整的人格设定提示词…"
+				/>
+				<view class="edit-btns">
+					<button class="edit-btn cancel" @tap="closePersona">取消</button>
+					<button class="edit-btn ok" @tap="savePersona">保存</button>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
@@ -158,10 +197,12 @@
 		removeConversation,
 		copyConversationToNew,
 		copyMemoriesToNew,
-		compressContext
+		compressContext,
+		saveConversationPersonality
 	} from '../../utils/chat.js'
 	import { getBackgroundImage, getScene, setScene, getSceneHistory } from '../../utils/storage.js'
 	import { formatMemoryTime } from '../../utils/memory.js'
+	import { PERSONALITIES } from '../../utils/prompts.js'
 
 	const THUMB_H = 48 // 滑块拇指高度（px），与样式一致
 
@@ -187,7 +228,11 @@
 				scrollInto: '',
 				dragRatio: 1,     // 滑块位置比例（0=顶部 1=底部），松手后保留
 				dragTip: '',
-				sliderRect: null
+				sliderRect: null,
+				personalities: PERSONALITIES,
+				showPersona: false,      // 会话人格弹窗
+				personaDraftId: '',      // 弹窗中选择的人格 id
+				personaDraftPrompt: ''   // 自定义人格提示词草稿
 			}
 		},
 		computed: {
@@ -325,6 +370,29 @@
 						}
 					}
 				})
+			},
+			// ---- 会话人格设置（仅作用于当前对话） ----
+			openPersona() {
+				const s = getConversationSettings()
+				this.personaDraftId = s.personalityId
+				this.personaDraftPrompt = s.customPrompt || ''
+				this.showPersona = true
+			},
+			closePersona() {
+				this.showPersona = false
+			},
+			pickPersona(id) {
+				this.personaDraftId = id
+			},
+			savePersona() {
+				if (this.personaDraftId === 'custom' && !this.personaDraftPrompt.trim()) {
+					uni.showToast({ title: '请填写自定义人格提示词', icon: 'none' })
+					return
+				}
+				saveConversationPersonality(this.personaDraftId, this.personaDraftPrompt)
+				this.showPersona = false
+				this.refreshHeader()
+				uni.showToast({ title: '已切换人格', icon: 'success' })
 			},
 			// ---- 当前情景编辑 ----
 			openSceneEdit() {
@@ -925,5 +993,61 @@
 
 	.copy-btn[disabled] {
 		opacity: 0.5;
+	}
+
+	.persona-panel {
+		width: 640rpx;
+		background: #fff;
+		border-radius: 20rpx;
+		padding: 32rpx;
+		box-sizing: border-box;
+	}
+
+	.persona-hint {
+		font-size: 22rpx;
+		color: #999;
+		text-align: center;
+		margin-bottom: 20rpx;
+	}
+
+	.persona-list {
+		height: 480rpx;
+	}
+
+	.persona-item {
+		padding: 18rpx 24rpx;
+		border-radius: 12rpx;
+		background: #f7f8fa;
+		margin-bottom: 16rpx;
+		border: 2rpx solid transparent;
+	}
+
+	.persona-item.active {
+		border-color: #5b7cfa;
+		background: #eef1fe;
+	}
+
+	.persona-item-name {
+		font-size: 28rpx;
+		color: #333;
+		font-weight: 500;
+	}
+
+	.persona-item-desc {
+		font-size: 22rpx;
+		color: #999;
+		margin-top: 4rpx;
+	}
+
+	.persona-custom {
+		width: 100%;
+		height: 260rpx;
+		background: #f7f8fa;
+		border-radius: 12rpx;
+		padding: 20rpx;
+		box-sizing: border-box;
+		font-size: 26rpx;
+		line-height: 1.6;
+		margin-top: 8rpx;
 	}
 </style>
