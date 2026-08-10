@@ -138,6 +138,7 @@
 					<button class="edit-btn copy-btn" :disabled="loading" @tap="copyMemories">复制记忆</button>
 				</view>
 				<button class="edit-btn ok compress-btn" :disabled="loading" @tap="doCompress">压缩上文为概要</button>
+				<button class="edit-btn cancel compress-btn" @tap="exportChat">导出对话为 .txt</button>
 				<button class="edit-btn cancel" @tap="closeHistory">关闭</button>
 			</view>
 		</view>
@@ -203,6 +204,7 @@
 	import { getBackgroundImage, getScene, setScene, getSceneHistory } from '../../utils/storage.js'
 	import { formatMemoryTime } from '../../utils/memory.js'
 	import { PERSONALITIES } from '../../utils/prompts.js'
+	import { exportChatToFile } from '../../utils/export.js'
 
 	const THUMB_H = 48 // 滑块拇指高度（px），与样式一致
 
@@ -498,6 +500,10 @@
 						uni.hideLoading()
 						uni.showToast({ title: '压缩失败：' + (e && e.message ? e.message : '未知错误'), icon: 'none' })
 					})
+			},
+			// ---- 导出聊天记录 ----
+			exportChat() {
+				exportChatToFile()
 			},
 			// ---- 侧边滑块 ----
 			querySlider() {

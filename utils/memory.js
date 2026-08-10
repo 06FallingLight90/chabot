@@ -146,6 +146,30 @@ export class MemoryStore {
 	}
 
 	// ---------- 保存 ----------
+	/** 手动新建记忆：直接追加一条，不做相似度合并（区别于 LLM 写入的 save，用户明确"新建"即新增） */
+	addMemory(content, importance = 3, level = 'L2', keywords = [], category = 'user_fact') {
+		content = String(content || '').trim()
+		if (!content) return
+		if (!keywords || !keywords.length) keywords = this.extractKeywords(content)
+		importance = Math.max(1, Math.min(5, importance))
+		if (level === 'L1' && importance < 3) importance = 3
+		if (level === 'L3' && importance > 4) importance = 4
+		if (importance <= 2 && level !== 'L1') level = 'L3'
+		getMemories().push({
+			id: nextMemoryId(),
+			category,
+			content,
+			keywords: keywords.join(','),
+			importance,
+			level,
+			created_at: nowIso(),
+			last_accessed_at: null,
+			access_count: 0
+		})
+		persistMemories()
+		this._enforceCapacity()
+	}
+
 	save(category, content, keywords, importance = 3, level = 'L2') {
 		if (!content || !String(content).trim()) return
 		const existing = this._keywordFindSimilar(content, keywords)[0]

@@ -131,6 +131,10 @@ assert(chat.listConversations()[0].title === '你好', '会话标题取首条用
 const chatMems = chat.memoryStore.listMemories()
 assert(chatMems.some((r) => r.content.includes('冰美式')), '聊天链路包含冰美式记忆')
 assert(chatMems.length >= ms.listMemories().length, '聊天链路记忆数 ≥ 手动写入数')
+// 落库应保存清理后的文本，Scene/Memory 标记不能混入历史（否则切页重载会显示在气泡里）
+const stored5 = kv.get('chabot_conversations')[0].messages
+assert(!stored5[1].content.includes('Memory:') && !stored5[1].content.includes('Scene:'), '落库内容不含 Scene/Memory 标记行')
+assert(!chat.getHistoryForUI().some((m) => /^\s*(Scene|Memory)\s*[:：]/i.test(m.content)), 'UI 历史无 Scene/Memory 标记行')
 
 console.log('\n[6] 记忆注入 system（命中用户新话题）')
 globalThis.uni.request = (opts) => {
@@ -410,6 +414,37 @@ assert(chat.getConversationSettings().personalityId === 'custom', '自定义人�
 assert(chat.getConversationSettings().customPrompt === '你是暗夜精灵', '自定义提示词已保存')
 assert(chat.openConversation(firstId), '切回第一个会话')
 assert(chat.getConversationSettings().personalityId === 'gentle', '第一个会话人格独立保留（不受其他会话影响）')
+
+console.log('\n[17] 手动新建记忆与多选删除')
+const before17 = ms.listMemories().length
+ms.addMemory('用户手工新建的一条记忆', 4, 'L2')
+let list17 = ms.listMemories()
+assert(list17.length === before17 + 1, '新建记忆新增 1 条')
+const new17 = list17.find((r) => r.content === '用户手工新建的一条记忆')
+assert(!!new17 && new17.importance === 4, '新建记忆优先级正确')
+assert(!!new17 && new17.level === 'L2', '新建记忆级别正确')
+// 新建超低优先级自动降 L3 的一致性兜底
+ms.addMemory('一条临时琐事', 1, 'L2')
+const low17 = ms.listMemories().find((r) => r.content === '一条临时琐事')
+assert(!!low17 && low17.level === 'L3', 'importance≤2 自动降 L3')
+ms.deleteMemories([new17.id, low17.id])
+assert(ms.listMemories().length === before17, '批量删除生效（多选删除底层接口）')
+
+console.log('\n[18] 聊天记录导出文本组装')
+const exp = await import('../utils/export.js')
+const exportText = exp.buildChatExportText()
+assert(exportText.length > 0, '导出文本非空')
+assert(exportText.includes('导出时间：'), '导出文本包含导出时间')
+assert(exportText.includes('用户：') && exportText.includes('AI：'), '导出文本包含用户/AI 行')
+assert(!exportText.includes('undefined'), '导出文本无 undefined/null 残留')
+
+console.log('\n[19] 旧数据标记行展示兜底（切页重载不显示 Scene/Memory）')
+// 模拟早期落库的含标记完整回复：UI 加载时应剔除标记、保留正文
+storage.addChatRow('assistant', '测试回复正文\nScene: 用户在测试\nMemory: user_fact 旧数据测试 | keywords:测试 | importance:3 | level:L2')
+const uiOld = chat.getHistoryForUI()
+const lastOld = uiOld[uiOld.length - 1]
+assert(lastOld.content.includes('测试回复正文'), '正常文本保留')
+assert(!lastOld.content.includes('Scene:') && !lastOld.content.includes('Memory:'), '旧数据标记行在 UI 展示时被剔除')
 
 console.log('\n================================')
 if (failed === 0) {

@@ -141,9 +141,19 @@ export function saveConversationPersonality(personalityId, customPrompt) {
 	addLog('info', '会话人格', `${getPersonaName(personalityId)}${personalityId === 'custom' ? '（自定义）' : ''}`)
 }
 
-/** 聊天页历史（返回副本，避免 UI 直接改坏存储数组） */
+/** 剔除消息文本行首的 Scene/Memory 标记行（修复旧数据：早期落库过含标记的完整回复） */
+function stripMetaLines(content) {
+	const clean = String(content || '')
+		.split('\n')
+		.filter((l) => !/^\s*(Scene|Memory)\s*[:：]/i.test(l))
+		.join('\n')
+		.trim()
+	return clean || '…'
+}
+
+/** 聊天页历史（返回副本，剔除遗留的 Scene/Memory 标记行后展示） */
 export function getHistoryForUI() {
-	return getChatRows().slice()
+	return getChatRows().map((r) => ({ ...r, content: stripMetaLines(r.content) }))
 }
 
 /** 清空对话 */
@@ -369,11 +379,7 @@ export async function sendMessage(userText) {
 		reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
 	})
 
-	// 5. 落库对话
-	addChatRow('user', userText)
-	addChatRow('assistant', reply.text)
-
-	// 6. 解析 Scene / Memory 行：Scene 更新当前情景，Memory 入库，均从展示文本剔除
+	// 5. 解析 Scene / Memory 行：Scene 更新当前情景，Memory 入库，均从展示文本剔除
 	let saved = 0
 	let newScene = null
 	const cleanLines = []
@@ -408,6 +414,11 @@ export async function sendMessage(userText) {
 		)
 		cleanReply = '（模型仅输出了记忆/情景标记，未生成对话内容）'
 	}
+
+	// 6. 落库对话：落库清理后的文本，Scene/Memory 标记不再混入历史——否则从其它页切回时
+	// 重新加载历史会把标记显示在气泡里（此前 bug），也会污染上下文压缩
+	addChatRow('user', userText)
+	addChatRow('assistant', cleanReply || '…')
 
 	// 7. 定期维护（L3 过期清理 / 降级 / 容量控制）
 	memoryStore.maintenance()

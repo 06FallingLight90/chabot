@@ -25,7 +25,7 @@
 ├── pages.json             # 页面注册 + tabBar（聊天/记忆/设置）
 ├── pages/
 │   ├── chat/chat.vue      # 聊天页（背景图、消息列表、输入、会话历史/新对话/压缩入口）
-│   ├── memory/memory.vue  # 记忆页（筛选/编辑内容/优先级/级别/删除）
+│   ├── memory/memory.vue  # 记忆页（筛选/新建/编辑内容/优先级/级别/多选删除）
 │   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/人格/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
 │   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
@@ -33,6 +33,7 @@
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 接口预设
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，stream:false + reasoning_effort 思考控制）
 │   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
+│   ├── export.js          # 聊天记录导出（H5 下载 / App 写文档目录 / 小程序复制降级）
 │   └── chat.js            # 聊天服务编排（导出 memoryStore 单例 + 会话管理 + 上下文压缩）
 └── scripts/test-memory.mjs  # 核心逻辑断言测试
 ```
@@ -46,6 +47,7 @@
 - **importance 1-5**，半衰期表 `HALF_LIFE`（L1: 7~∞ / L2: 3~60 / L3: 1~3 天）
 - **有效重要性** = 基础分 × 半衰期时间衰减 × 回忆强化因子（`effectiveImportance`）
 - **LLM 驱动写入**：system prompt 内置 `MEMORY_GUIDE`（prompts.js），回复中的 `Memory:` 行经 `saveFromLine` 解析入库。支持三种操作：**新增**（类别 内容）/**修改**（修改 原内容 → 新内容）/**删除**（删除 原内容），修改/删除按内容逐字匹配。找不到匹配则静默忽略。
+- **手动管理**：记忆页「新建」走 `addMemory(content, importance, level)`——直接追加一条不做相似度合并（区别于 LLM 写入的 `save`）；「多选删除」走 `deleteMemories(ids)` 批量删除
 - **去重合并**：字符 bigram Jaccard(0.6) + LCS 序列相似度(0.4)，≥0.6 视为近似、≥0.85 触发召回冷却拦截
 - **召回冷却**：记忆被召回后 300s 内禁止重复保存；复读视为强调 → importance +1（上限 5）
 - **分层检索** `retrieveContext`：核心槽(30%) + 新鲜槽(20%) + MMR 多样性槽(50%)，λ=0.7
@@ -74,7 +76,7 @@
 
 ### 聊天链路（utils/chat.js）
 
-`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → 落库对话 → 解析 `Scene:` 行更新当前情景、`Memory:` 行入库，均从展示文本剔除 → 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
+`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → 解析 `Scene:` 行更新当前情景、`Memory:` 行入库并**先得到清理后的回复文本** → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
 
 ### 上下文压缩（utils/chat.js）
 
@@ -101,7 +103,7 @@
 ### 聊天页 UI
 
 - 背景图固定于 scroll-view 可视区（cover 铺满，不随内容拉伸/滚动）
-- 头部「人格名（点击设置）/ 历史 / 新对话 / 清空」：人格名点击弹出「当前对话人格」设置（预置 4 款 + 自定义提示词，保存写入会话快照）；历史弹窗切换/删除会话；压缩按钮位于历史弹窗内
+- 头部「人格名（点击设置）/ 历史 / 新对话 / 清空」：人格名点击弹出「当前对话人格」设置（预置 4 款 + 自定义提示词，保存写入会话快照）；历史弹窗切换/删除会话、压缩上文、**导出对话为 .txt**（`utils/export.js`：H5 Blob 下载带 BOM、App plus.io 写 `_doc` 并尝试系统打开、小程序复制全文降级）
 - **一键回到底部**：右下角浮动按钮，仅当用户上翻离开底部时出现（`@scroll` 的 `scrollTop` 差值 + `@touchmove` 方向兜底，隐藏靠 `@scrolltolower`/发消息回底）；滚动采用「先清空再设置 `scrollInto`」以强制触发
 - 侧边滑块：聊天记录 >15 条时出现，按住滑块按比例定位到对应消息（scroll-into-view 到 `msg-N` 锚点）
 - 场景编辑弹窗与历史弹窗、记忆页共用 mask/panel 样式

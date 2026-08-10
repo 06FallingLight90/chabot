@@ -12,7 +12,11 @@
 					{{ f.label }}
 				</view>
 			</view>
-			<view class="count">共 {{ memories.length }} 条</view>
+			<view class="toolbar-right">
+				<view class="count">共 {{ memories.length }} 条</view>
+				<view class="tool-btn" @tap="openNew">新建</view>
+				<view class="tool-btn" :class="{ on: multiMode }" @tap="toggleMulti">{{ multiMode ? '取消' : '多选' }}</view>
+			</view>
 		</view>
 		<view class="conv-bar">
 			<text class="conv-label">当前对话</text>
@@ -21,26 +25,34 @@
 
 		<scroll-view scroll-y class="list">
 			<view v-if="!memories.length" class="empty">暂无记忆</view>
-			<view v-for="m in memories" :key="m.id" class="card">
+			<view v-for="m in memories" :key="m.id" class="card" :class="{ selected: isSelected(m.id) }" @tap="multiMode && toggleSelect(m.id)">
 				<view class="card-head">
+					<view v-if="multiMode" class="check" :class="{ on: isSelected(m.id) }"></view>
 					<text class="badge" :class="'lv-' + m.level">{{ m.level }}</text>
 					<text class="cat">{{ m.category }}</text>
 					<text class="stars">
 						{{ '★'.repeat(m.importance) }}<text class="dim">{{ '☆'.repeat(5 - m.importance) }}</text>
 					</text>
 					<text class="time">{{ fmtTime(m.created_at) }}</text>
-					<text class="edit" @tap="openEdit(m)">编辑</text>
-					<text class="del" @tap="remove(m.id)">删除</text>
+					<text v-if="!multiMode" class="edit" @tap.stop="openEdit(m)">编辑</text>
+					<text v-if="!multiMode" class="del" @tap.stop="remove(m.id)">删除</text>
 				</view>
 				<view class="card-content">{{ m.content }}</view>
 				<view v-if="m.keywords" class="card-kw"># {{ m.keywords.split(',').join('  # ') }}</view>
 			</view>
 		</scroll-view>
 
-		<!-- 编辑记忆弹窗 -->
+		<!-- 多选删除操作栏 -->
+		<view v-if="multiMode" class="multi-bar">
+			<text class="multi-count">已选 {{ selectedIds.length }} 条</text>
+			<view class="multi-all" @tap="selectAll">{{ isAllSelected ? '取消全选' : '全选' }}</view>
+			<button class="multi-del" :disabled="!selectedIds.length" @tap="removeSelected">删除所选</button>
+		</view>
+
+		<!-- 编辑/新建记忆弹窗 -->
 		<view v-if="showEdit" class="mask" @tap="closeEdit">
 			<view class="edit-panel" @tap.stop>
-				<view class="edit-title">编辑记忆</view>
+				<view class="edit-title">{{ editingId === null ? '新建记忆' : '编辑记忆' }}</view>
 				<textarea class="edit-area" v-model="editContent" placeholder="记忆内容…" />
 				<view class="edit-priority">
 					<text class="edit-label">优先级</text>
@@ -98,10 +110,18 @@
 					{ label: 'L3 临时', value: 'L3' }
 				],
 				showEdit: false,
-				editingId: null,
+				editingId: null, // null=新建，非 null=编辑对应记忆
 				editLevel: 'L2',
 				editContent: '',
-				editImportance: 3
+				editImportance: 3,
+				multiMode: false,     // 多选删除模式
+				selectedIds: []       // 多选模式下勾选的记忆 id
+			}
+		},
+		computed: {
+			// 当前筛选结果是否全部选中
+			isAllSelected() {
+				return this.memories.length > 0 && this.selectedIds.length === this.memories.length
 			}
 		},
 		onShow() {
@@ -129,6 +149,13 @@
 				this.editImportance = m.importance
 				this.showEdit = true
 			},
+			openNew() {
+				this.editingId = null
+				this.editLevel = 'L2'
+				this.editContent = ''
+				this.editImportance = 3
+				this.showEdit = true
+			},
 			closeEdit() {
 				this.showEdit = false
 			},
@@ -143,10 +170,15 @@
 				let level = this.editLevel
 				if (level === 'L1' && importance < 3) importance = 3
 				if (level === 'L3' && importance > 4) importance = 4
-				memoryStore.updateMemory(this.editingId, { content, importance, level })
+				if (this.editingId === null) {
+					memoryStore.addMemory(content, importance, level)
+					uni.showToast({ title: '已新建', icon: 'success' })
+				} else {
+					memoryStore.updateMemory(this.editingId, { content, importance, level })
+					uni.showToast({ title: '已保存', icon: 'success' })
+				}
 				this.showEdit = false
 				this.load()
-				uni.showToast({ title: '已保存', icon: 'success' })
 			},
 			remove(id) {
 				uni.showModal({
@@ -157,6 +189,37 @@
 							memoryStore.deleteMemories([id])
 							this.load()
 						}
+					}
+				})
+			},
+			// ---- 多选删除 ----
+			toggleMulti() {
+				this.multiMode = !this.multiMode
+				this.selectedIds = []
+			},
+			isSelected(id) {
+				return this.selectedIds.includes(id)
+			},
+			toggleSelect(id) {
+				const i = this.selectedIds.indexOf(id)
+				if (i >= 0) this.selectedIds.splice(i, 1)
+				else this.selectedIds.push(id)
+			},
+			selectAll() {
+				this.selectedIds = this.isAllSelected ? [] : this.memories.map((m) => m.id)
+			},
+			removeSelected() {
+				if (!this.selectedIds.length) return
+				uni.showModal({
+					title: '删除记忆',
+					content: `确定删除选中的 ${this.selectedIds.length} 条记忆吗？`,
+					success: (res) => {
+						if (!res.confirm) return
+						memoryStore.deleteMemories(this.selectedIds)
+						this.selectedIds = []
+						this.multiMode = false
+						this.load()
+						uni.showToast({ title: '已删除', icon: 'success' })
 					}
 				})
 			}
@@ -204,6 +267,25 @@
 		color: #999;
 	}
 
+	.toolbar-right {
+		display: flex;
+		align-items: center;
+	}
+
+	.tool-btn {
+		margin-left: 16rpx;
+		padding: 8rpx 24rpx;
+		border-radius: 30rpx;
+		font-size: 24rpx;
+		color: #5b7cfa;
+		background: #eef1fe;
+	}
+
+	.tool-btn.on {
+		color: #fff;
+		background: #f53f3f;
+	}
+
 	.conv-bar {
 		display: flex;
 		align-items: center;
@@ -245,6 +327,40 @@
 		padding: 24rpx;
 		margin-bottom: 20rpx;
 		box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+		border: 2rpx solid transparent;
+	}
+
+	.card.selected {
+		border-color: #5b7cfa;
+		background: #f5f7ff;
+	}
+
+	.check {
+		width: 36rpx;
+		height: 36rpx;
+		border-radius: 50%;
+		border: 2rpx solid #c0c4cc;
+		margin-right: 16rpx;
+		flex-shrink: 0;
+		box-sizing: border-box;
+	}
+
+	.check.on {
+		border-color: #5b7cfa;
+		background: #5b7cfa;
+		position: relative;
+	}
+
+	.check.on::after {
+		content: '';
+		position: absolute;
+		left: 10rpx;
+		top: 5rpx;
+		width: 10rpx;
+		height: 18rpx;
+		border: solid #fff;
+		border-width: 0 3rpx 3rpx 0;
+		transform: rotate(45deg);
 	}
 
 	.card-head {
@@ -439,5 +555,40 @@
 	.edit-btn.ok {
 		color: #fff;
 		background: #5b7cfa;
+	}
+
+	.multi-bar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 16rpx 30rpx calc(16rpx + env(safe-area-inset-bottom));
+		background: #ffffff;
+		border-top: 1rpx solid #eee;
+	}
+
+	.multi-count {
+		font-size: 26rpx;
+		color: #333;
+	}
+
+	.multi-all {
+		font-size: 26rpx;
+		color: #5b7cfa;
+		padding: 8rpx 16rpx;
+	}
+
+	.multi-del {
+		width: 240rpx;
+		height: 76rpx;
+		line-height: 76rpx;
+		font-size: 28rpx;
+		color: #fff;
+		background: #f53f3f;
+		border-radius: 38rpx;
+	}
+
+	.multi-del[disabled] {
+		background: #ffd4d4;
+		color: #fff;
 	}
 </style>
