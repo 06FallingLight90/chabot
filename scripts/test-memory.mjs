@@ -446,6 +446,54 @@ const lastOld = uiOld[uiOld.length - 1]
 assert(lastOld.content.includes('测试回复正文'), '正常文本保留')
 assert(!lastOld.content.includes('Scene:') && !lastOld.content.includes('Memory:'), '旧数据标记行在 UI 展示时被剔除')
 
+console.log('\n[20] 回复格式校验与自动重试')
+chat.saveSettings({ ...chat.getSettings(), maxRequestAttempts: 5 })
+// 第 1 次只输出 Memory 标记、无对话文本 → 自动重试，第 2 次正常
+let failOnce = true
+globalThis.uni.request = (opts) => {
+	captured = opts
+	if (failOnce) {
+		failOnce = false
+		opts.success({
+			statusCode: 200,
+			data: { choices: [{ message: { content: 'Memory: user_fact 重试测试 | keywords:测试 | importance:3 | level:L2' } }] }
+		})
+		return
+	}
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '这次格式正常啦' } }] } })
+}
+let r20 = await chat.sendMessage('格式校验测试')
+assert(r20.reply === '这次格式正常啦', '重试后返回格式正确的回复')
+assert(!r20.reply.includes('Memory:') && !r20.reply.includes('Scene:'), '展示文本不含标记')
+let log20 = logsMod.getLogs()
+assert(log20.some((l) => l.msg.includes('回复格式不合格')), '日志记录格式不合格并重试')
+// 非法 Memory 行（删除操作无目标内容）也触发重试
+let badOnce = true
+globalThis.uni.request = (opts) => {
+	captured = opts
+	if (badOnce) {
+		badOnce = false
+		opts.success({ statusCode: 200, data: { choices: [{ message: { content: '正常文本\nMemory: 删除' } }] } })
+		return
+	}
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '第二版正常' } }] } })
+}
+let r20b = await chat.sendMessage('格式校验2')
+assert(r20b.reply === '第二版正常', '非法 Memory 行触发重试')
+// 全部尝试都格式不合格 → 达到上限抛错
+globalThis.uni.request = (opts) => {
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: 'Scene: 只有场景' } }] } })
+}
+let threw20 = false
+try {
+	await chat.sendMessage('格式全部失败')
+} catch (e) {
+	threw20 = e.message.includes('格式')
+}
+assert(threw20, '达到最大请求次数后抛错')
+log20 = logsMod.getLogs()
+assert(log20.some((l) => l.type === 'err' && l.msg.includes('已达请求上限')), '日志记录达上限错误')
+
 console.log('\n================================')
 if (failed === 0) {
 	console.log('全部断言通过 ✓')

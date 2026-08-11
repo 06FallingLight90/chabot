@@ -37,6 +37,11 @@
 					Ollama 本地思考模型（如 Qwen3）默认思考会占满输出 token 导致回复为空，建议关闭；开启仅对思考型模型生效，其他模型自动忽略。
 				</view>
 			</view>
+			<view class="field">
+				<text class="label">最大请求次数（{{ s.maxRequestAttempts }}）</text>
+				<input class="input" type="number" v-model.number="s.maxRequestAttempts" placeholder="5" />
+				<view class="time-mode-hint">回复格式不合格时自动重新请求的次数上限（1-20，默认 5）；达到上限仍不合格则提示错误，不写入对话与记忆。</view>
+			</view>
 			<view class="api-presets">
 				<view class="presets-head">
 					<text class="label">预设配置（最多 3 套）</text>
@@ -341,7 +346,7 @@
 				addLog(
 					'info',
 					'保存设置',
-					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval}`
+					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval} · 最大请求次数=${this.s.maxRequestAttempts}`
 				)
 				uni.showToast({ title: '已保存', icon: 'success' })
 			},

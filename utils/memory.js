@@ -198,38 +198,20 @@ export class MemoryStore {
 	}
 
 	/**
-	 * 解析 LLM 输出的 Memory 行并保存。
+	 * 解析 LLM 输出的 Memory 行并保存（先经 parseMemoryLine 格式校验，非法返回 false）。
 	 * 兼容三种操作：
 	 *   Memory: 类别 内容 | keywords:.. | importance:.. | level:..   ← 新增
 	 *   Memory: 修改 原内容 → 新内容 | keywords:.. | ...              ← 修改
 	 *   Memory: 删除 原内容                                            ← 删除
 	 */
 	saveFromLine(line) {
-		line = (line || '').trim().replace(/^memory[:：]\s*/i, '')
-		if (!line) return false
+		const parsed = parseMemoryLine(line)
+		if (!parsed) return false
+		if (parsed.action === 'delete') return this._deleteByContent(parsed.content)
+		if (parsed.action === 'modify') return this._modifyByContent(parsed.oldContent, parsed.rest)
 
-		// 删除: Memory: 删除 原内容
-		if (/^删除\s+/i.test(line)) {
-			const target = line.replace(/^删除\s+/i, '').trim()
-			return this._deleteByContent(target)
-		}
-
-		// 修改: Memory: 修改 原内容 → 新内容 | keywords:.. | ...
-		// 兼容半角→全角→箭头和破折号等多种变体
-		const modMatch = line.match(/^修改\s+(.+?)\s*(?:→|→|—)\s*(.+)$/i)
-		if (modMatch) {
-			const oldContent = modMatch[1].trim()
-			const rest = modMatch[2].trim()
-			return this._modifyByContent(oldContent, rest)
-		}
-
-		// 新增（原逻辑）：兼容 "category content | ..." 与 "category: content | ..."
-		let m = line.match(/^\[([\w]+)\][:：]?\s*(.+)$/)
-		if (!m) m = line.match(/^(\w+)[:：]?\s+(.+)$/)
-		if (!m) return false
-		const category = m[1]
-		const parts = m[2].split('|').map((p) => p.trim()).filter(Boolean)
-		if (!parts.length) return false
+		// 新增：解析 keywords/importance/level 等可选字段
+		const parts = parsed.parts
 		let content = parts[0]
 		let keywords = []
 		let importance = 3
@@ -250,7 +232,7 @@ export class MemoryStore {
 		if (level === 'L1' && importance < 3) importance = 3
 		if (level === 'L3' && importance > 4) importance = 4
 		if (importance <= 2 && level !== 'L1') level = 'L3'
-		this.save(category, content, keywords, importance, level)
+		this.save(parsed.category, content, keywords, importance, level)
 		return true
 	}
 
@@ -633,6 +615,42 @@ export class MemoryStore {
 		if (patch.keywords !== undefined) r.keywords = patch.keywords
 		persistMemories()
 	}
+}
+
+/**
+ * 纯解析 Memory 行（不写入），供格式校验与 saveFromLine 复用。
+ * 兼容三种操作：新增 / 修改 / 删除；格式非法返回 null。
+ * @param {string} line 原始 Memory 行（含 "Memory:" 前缀）
+ * @returns {{action:'delete',content:string}|{action:'modify',oldContent:string,rest:string}|{action:'add',category:string,parts:string[]}|null}
+ */
+export function parseMemoryLine(line) {
+	line = (line || '').trim().replace(/^memory[:：]\s*/i, '')
+	if (!line) return null
+
+	// 删除: Memory: 删除 原内容
+	if (/^删除\s+/i.test(line)) {
+		const target = line.replace(/^删除\s+/i, '').trim()
+		return target ? { action: 'delete', content: target } : null
+	}
+
+	// 修改: Memory: 修改 原内容 → 新内容 | keywords:.. | ...（兼容半角→全角→和破折号）
+	const modMatch = line.match(/^修改\s+(.+?)\s*(?:→|→|—)\s*(.+)$/i)
+	if (modMatch) {
+		const oldContent = modMatch[1].trim()
+		const rest = modMatch[2].trim()
+		const parts = rest.split('|').map((p) => p.trim()).filter(Boolean)
+		if (oldContent && parts.length && parts[0]) return { action: 'modify', oldContent, rest }
+		return null
+	}
+
+	// 新增：兼容 "category content | ..." 与 "category: content | ..."
+	let m = line.match(/^\[([\w]+)\][:：]?\s*(.+)$/)
+	if (!m) m = line.match(/^(\w+)[:：]?\s+(.+)$/)
+	if (!m) return null
+	const category = m[1]
+	const parts = m[2].split('|').map((p) => p.trim()).filter(Boolean)
+	if (!parts.length || !parts[0]) return null
+	return { action: 'add', category, parts }
 }
 
 /** 记忆创建时间的简短中文描述 */

@@ -26,7 +26,7 @@ import {
 	duplicateConversationToNew,
 	duplicateMemoriesToNew
 } from './storage.js'
-import { MemoryStore } from './memory.js'
+import { MemoryStore, parseMemoryLine } from './memory.js'
 import { buildSystemPrompt, buildNowText, getPersonalityById, getPersonaName } from './prompts.js'
 import { chatCompletion } from './llm.js'
 import { addLog } from './log.js'
@@ -81,6 +81,7 @@ export function getSettings() {
 		customPrompt: getSetting('customPrompt', ''),
 		timeMode: getSetting('timeMode', 'real'), // 情景时间模式：real 现实时间 / virtual 虚拟时间
 		compressInterval: parseInt(getSetting('compressInterval', '0'), 10) || 0, // 自动压缩间隔（条），0=关闭
+		maxRequestAttempts: parseInt(getSetting('maxRequestAttempts', '5'), 10) || 5, // 回复格式不合格时的最大请求次数（重试上限）
 		personaName: getPersonaName(personalityId)
 	}
 }
@@ -96,6 +97,7 @@ export function saveSettings(s) {
 	setSetting('customPrompt', s.customPrompt || '')
 	setSetting('timeMode', s.timeMode === 'virtual' ? 'virtual' : 'real')
 	setSetting('compressInterval', String(s.compressInterval || 0))
+	setSetting('maxRequestAttempts', String(Math.max(1, Math.min(20, parseInt(s.maxRequestAttempts, 10) || 5))))
 }
 
 /**
@@ -357,68 +359,55 @@ export async function sendMessage(userText) {
 		conv.timeMode === 'virtual' ? '' : buildNowText()
 	)
 
-	// 3. 组装 messages：system + 未压缩历史 + 当前用户消息
-	// 压缩概要并入首条 system 末尾，避免出现第二条 system 消息——Ollama 等模板要求
-	// system 必须在 messages 最前且只能一条，多条 system 会抛 "System message must be at the beginning"
-	const { summary, compressedUntil } = getConversationCompression()
-	const messages = [
-		{ role: 'system', content: summary ? `${system}\n\n此前对话概要：${summary}` : system }
-	]
-	for (const h of getChatRows().slice(compressedUntil).slice(-HISTORY_ENTRIES)) {
-		messages.push({ role: h.role, content: h.content })
-	}
-	messages.push({ role: 'user', content: userText })
-
-	// 4. 调用 LLM
-	const reply = await chatCompletion({
-		baseUrl: s.baseUrl,
-		apiKey: s.apiKey,
-		model: s.model,
-		messages,
-		temperature: s.temperature,
-		reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
-	})
-
-	// 5. 解析 Scene / Memory 行：Scene 更新当前情景，Memory 入库，均从展示文本剔除
-	let saved = 0
-	let newScene = null
-	const cleanLines = []
-	for (const line of reply.text.split('\n')) {
-		if (/^\s*Scene\s*[:：]/i.test(line)) {
-			newScene = line
-				.replace(/^\s*Scene\s*[:：]\s*/i, '')
-				.replace(/^["'""'']+|["'""'']+$/g, '') // 去掉 LLM 可能加上的引号
-				.replace(/[。！!]$/, '')              // 去掉末尾标点
-				.trim()
-			continue
+	// 3-5. 请求 → 格式校验 → 解析：回复格式不合格时自动重试（上限 maxRequestAttempts）。
+	// 每次尝试都基于同一份历史重新组装；校验通过才写入 Scene/Memory 并落库，失败尝试无副作用。
+	const maxAttempts = Math.max(1, Math.min(20, parseInt(s.maxRequestAttempts, 10) || 5))
+	let result = null
+	let lastReason = ''
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		// 组装 messages：system + 未压缩历史 + 当前用户消息
+		// 压缩概要并入首条 system 末尾，避免出现第二条 system 消息——Ollama 等模板要求
+		// system 必须在 messages 最前且只能一条，多条 system 会抛 "System message must be at the beginning"
+		const { summary, compressedUntil } = getConversationCompression()
+		const messages = [
+			{ role: 'system', content: summary ? `${system}\n\n此前对话概要：${summary}` : system }
+		]
+		for (const h of getChatRows().slice(compressedUntil).slice(-HISTORY_ENTRIES)) {
+			messages.push({ role: h.role, content: h.content })
 		}
-		if (/^\s*Memory\s*[:：]/i.test(line)) {
-			if (memoryStore.saveFromLine(line)) saved++
-			continue
+		messages.push({ role: 'user', content: userText })
+
+		const reply = await chatCompletion({
+			baseUrl: s.baseUrl,
+			apiKey: s.apiKey,
+			model: s.model,
+			messages,
+			temperature: s.temperature,
+			reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
+		})
+
+		const parsed = parseAndValidateReply(reply.text)
+		if (parsed.ok) {
+			result = parsed
+			break
 		}
-		cleanLines.push(line)
+		lastReason = parsed.reason
+		addLog('info', '回复格式不合格，自动重试', `第 ${attempt}/${maxAttempts} 次：${lastReason}`)
 	}
-	if (newScene) {
-		setScene(newScene)
-		addLog('info', '情景更新', newScene)
-	}
-	if (saved > 0) addLog('info', `记忆入库 ${saved} 条`)
-	let cleanReply = cleanLines.join('\n').trim()
-	// 原始回复非空但清理后为空：模型只输出了 Scene/Memory 结构化标记行，未生成对话内容。
-	// 明确提示用户，避免显示空白/省略号造成困惑（本地小模型可能出现此情况）。
-	if (!cleanReply && reply.text && reply.text.trim()) {
-		addLog(
-			'info',
-			'回复内容为空',
-			`模型仅输出了 ${saved} 条记忆/${newScene ? '1' : '0'} 条情景标记，未生成对话文本\n--- 原始返回 ---\n${reply.text}`
-		)
-		cleanReply = '（模型仅输出了记忆/情景标记，未生成对话内容）'
+	if (!result) {
+		addLog('err', '回复格式不合格（已达请求上限）', `最大请求次数 ${maxAttempts}：${lastReason}`)
+		throw new Error(`模型回复格式连续 ${maxAttempts} 次不合格（${lastReason}）`)
 	}
 
 	// 6. 落库对话：落库清理后的文本，Scene/Memory 标记不再混入历史——否则从其它页切回时
 	// 重新加载历史会把标记显示在气泡里（此前 bug），也会污染上下文压缩
 	addChatRow('user', userText)
-	addChatRow('assistant', cleanReply || '…')
+	addChatRow('assistant', result.cleanReply || '…')
+	if (result.newScene) {
+		setScene(result.newScene)
+		addLog('info', '情景更新', result.newScene)
+	}
+	if (result.saved > 0) addLog('info', `记忆入库 ${result.saved} 条`)
 
 	// 7. 定期维护（L3 过期清理 / 降级 / 容量控制）
 	memoryStore.maintenance()
@@ -426,5 +415,48 @@ export async function sendMessage(userText) {
 	// 8. 自动压缩检查（异步执行，不阻塞回复展示）
 	maybeCompress().catch(() => { })
 
-	return { reply: cleanReply || '…', saved }
+	return { reply: result.cleanReply || '…', saved: result.saved }
+}
+
+/**
+ * 校验 LLM 回复格式并解析 Scene/Memory（校验通过才写库，供 sendMessage 重试使用）：
+ * - 回复必须包含对话文本（仅 Scene/Memory 标记视为不合格）
+ * - Scene 行必须有内容；Memory 行必须能被 parseMemoryLine 解析
+ * @param {string} text LLM 原始回复
+ * @returns {{ok:boolean, reason?:string, saved?:number, newScene?:string|null, cleanReply?:string}}
+ */
+function parseAndValidateReply(text) {
+	const lines = String(text || '').split('\n')
+	// 第一步：格式校验（不写入）
+	let newScene = null
+	let hasContent = false
+	const cleanLines = []
+	for (const line of lines) {
+		if (/^\s*Scene\s*[:：]/i.test(line)) {
+			newScene = line
+				.replace(/^\s*Scene\s*[:：]\s*/i, '')
+				.replace(/^["'""'']+|["'""'']+$/g, '') // 去掉 LLM 可能加上的引号
+				.replace(/[。！!]$/, '')              // 去掉末尾标点
+				.trim()
+			if (!newScene) return { ok: false, reason: 'Scene 行内容为空' }
+			continue
+		}
+		if (/^\s*Memory\s*[:：]/i.test(line)) {
+			if (!parseMemoryLine(line)) return { ok: false, reason: `Memory 行格式非法：${line.trim().slice(0, 24)}` }
+			continue
+		}
+		cleanLines.push(line)
+		if (line.trim()) hasContent = true
+	}
+	if (!hasContent) return { ok: false, reason: '回复仅含 Scene/Memory 标记，无对话文本' }
+	const cleanReply = cleanLines.join('\n').trim()
+
+	// 第二步：校验通过，执行写入（Scene 更新情景 / Memory 入库）
+	let saved = 0
+	for (const line of lines) {
+		if (/^\s*Memory\s*[:：]/i.test(line)) {
+			if (memoryStore.saveFromLine(line)) saved++
+		}
+	}
+	return { ok: true, saved, newScene, cleanReply }
 }
