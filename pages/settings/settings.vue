@@ -178,7 +178,7 @@
 </template>
 
 <script>
-	import { getSettings, saveSettings, clearConversation } from '../../utils/chat.js'
+	import { getConversationSettings, saveSettings, saveConversationPersonality, clearConversation } from '../../utils/chat.js'
 	import { PERSONALITIES, PROVIDERS } from '../../utils/prompts.js'
 	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage, getApiProfiles, saveApiProfile, deleteApiProfile } from '../../utils/storage.js'
 	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
@@ -188,7 +188,7 @@
 	export default {
 		data() {
 			return {
-				s: getSettings(),
+				s: getConversationSettings(),
 				personalities: PERSONALITIES,
 				providers: PROVIDERS,
 				bg: getBackgroundImage(),
@@ -225,7 +225,8 @@
 			}
 		},
 		onShow() {
-			this.s = getSettings()
+			// 人格/情景时间随当前对话（会话快照）显示，与聊天页设置保持同步；API 配置仍为全局
+			this.s = getConversationSettings()
 			this.bg = getBackgroundImage()
 			this.logs = getLogs()
 			this.presets = getApiProfiles()
@@ -343,6 +344,8 @@
 					return
 				}
 				saveSettings(this.s)
+				// 人格/情景时间写入当前会话快照，使设置面板与当前对话的人格提示词保持一致
+				saveConversationPersonality(this.s.personalityId, this.s.customPrompt, this.s.timeMode)
 				addLog(
 					'info',
 					'保存设置',

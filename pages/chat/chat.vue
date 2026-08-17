@@ -259,7 +259,9 @@
 			}
 		},
 		onShow() {
-			this.messages = getHistoryForUI()
+			// 等待 LLM 响应期间不重载消息列表：刚发送的用户消息尚未落库，
+			// 若切到外部页面再切回时重新拉取历史，这条消息会从记录中消失
+			if (!this.loading) this.messages = getHistoryForUI()
 			this.refreshHeader()
 			this.bg = getBackgroundImage()
 			this.scene = getScene()

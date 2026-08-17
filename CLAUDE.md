@@ -76,7 +76,7 @@
 
 ### 聊天链路（utils/chat.js）
 
-`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → **`parseAndValidateReply` 格式校验**（须含对话文本、Scene 行有内容、Memory 行可解析；不合格自动重新请求，上限设置项 `maxRequestAttempts`，默认 5，达上限抛错）→ 校验通过才解析 `Scene:` 行更新情景、`Memory:` 行入库并得到清理后的回复文本 → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
+`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → **`parseAndValidateReply` 格式校验**（须含对话文本、Scene 行有内容、Memory 行可解析；检测非行首 `Scene:`/`Memory:` 标记（未独立成行）与"缺 `Memory:` 前缀却带 `| keywords:`/`| importance:`/`| level:` 结构"的伪 Memory 行；不合格自动重新请求，上限设置项 `maxRequestAttempts`，默认 5，达上限抛错）→ 校验通过才解析 `Scene:` 行更新情景、`Memory:` 行入库并得到清理后的回复文本 → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
 
 ### 上下文压缩（utils/chat.js）
 

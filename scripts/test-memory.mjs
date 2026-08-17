@@ -480,6 +480,49 @@ globalThis.uni.request = (opts) => {
 }
 let r20b = await chat.sendMessage('格式校验2')
 assert(r20b.reply === '第二版正常', '非法 Memory 行触发重试')
+// 伪 Memory 行：含 | keywords:/| importance:/| level: 结构但缺少 Memory: 前缀（如 "✅ 更新：3. xxx"）
+let fakeOnce = true
+globalThis.uni.request = (opts) => {
+	captured = opts
+	if (fakeOnce) {
+		fakeOnce = false
+		opts.success({
+			statusCode: 200,
+			data: {
+				choices: [
+					{
+						message: {
+							content:
+								'别跑掉喔，好想要抓紧你。\n✅ 更新：3. user confusion: breathing machine status | keywords:呼吸机 | importance:2 | level:L3'
+						}
+					}
+				]
+			}
+		})
+		return
+	}
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '伪格式修复后正常回复' } }] } })
+}
+let r20c = await chat.sendMessage('伪记忆行测试')
+assert(r20c.reply === '伪格式修复后正常回复', '伪 Memory 行（缺少 Memory: 前缀）触发重试')
+// 行内 Scene 标记：Scene: 未独立成行（如 "正文 [Scene: xxx]"）也触发重试
+let inlineOnce = true
+globalThis.uni.request = (opts) => {
+	captured = opts
+	if (inlineOnce) {
+		inlineOnce = false
+		opts.success({
+			statusCode: 200,
+			data: {
+				choices: [{ message: { content: '那些复杂的声音……早就坏掉了呢……🌀🧸✨ [Scene: 发光雾中，恋歪头看着用户沉默]' } }]
+			}
+		})
+		return
+	}
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '行内Scene修复后回复' } }] } })
+}
+let r20d = await chat.sendMessage('行内Scene测试')
+assert(r20d.reply === '行内Scene修复后回复', '行内 Scene 标记（未独立成行）触发重试')
 // 全部尝试都格式不合格 → 达到上限抛错
 globalThis.uni.request = (opts) => {
 	opts.success({ statusCode: 200, data: { choices: [{ message: { content: 'Scene: 只有场景' } }] } })

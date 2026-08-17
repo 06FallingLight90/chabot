@@ -131,14 +131,14 @@ function snapshotPersonality() {
 
 /**
  * 保存当前会话的人格设置（写入会话快照，仅作用于当前对话，不影响全局与其他会话）。
- * timeMode 沿用当前会话生效的模式，保持会话内的情景时间设置不漂移。
+ * timeMode 可选：不传则沿用当前会话生效的模式，保持会话内的情景时间设置不漂移。
  */
-export function saveConversationPersonality(personalityId, customPrompt) {
+export function saveConversationPersonality(personalityId, customPrompt, timeMode) {
 	const s = getConversationSettings()
 	setConversationPersonality({
 		personalityId,
 		customPrompt: personalityId === 'custom' ? (customPrompt || '') : '',
-		timeMode: s.timeMode
+		timeMode: timeMode !== undefined ? timeMode : s.timeMode
 	})
 	addLog('info', '会话人格', `${getPersonaName(personalityId)}${personalityId === 'custom' ? '（自定义）' : ''}`)
 }
@@ -444,6 +444,16 @@ function parseAndValidateReply(text) {
 		if (/^\s*Memory\s*[:：]/i.test(line)) {
 			if (!parseMemoryLine(line)) return { ok: false, reason: `Memory 行格式非法：${line.trim().slice(0, 24)}` }
 			continue
+		}
+		// 行内 Scene/Memory 标记（如 "正文 [Scene: xxx]"）：Scene/Memory 必须独立成行，
+		// 行首形式已在上方分支处理，走到这里仍含 Scene:/Memory: 即未独立成行 → 判定格式非法
+		if (/Scene\s*[:：]/i.test(line) || /Memory\s*[:：]/i.test(line)) {
+			return { ok: false, reason: `Scene/Memory 标记未独立成行：${line.trim().slice(0, 28)}` }
+		}
+		// 疑似 Memory 行：含 | keywords:/| importance:/| level: 分段结构却缺少 Memory: 前缀
+		// （如 "✅ 更新：3. xxx | keywords:.. | importance:.. | level:.."），判定格式非法并触发重试
+		if (/\|\s*(?:keywords|importance|level):/i.test(line)) {
+			return { ok: false, reason: `疑似 Memory 行缺少 Memory: 前缀：${line.trim().slice(0, 28)}` }
 		}
 		cleanLines.push(line)
 		if (line.trim()) hasContent = true
