@@ -266,11 +266,11 @@ chat.saveSettings({
 	baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-test',
 	temperature: 0.8, personalityId: 'gentle', customPrompt: '', timeMode: 'real'
 })
-assert(chat.getConversationSettings().personalityId === 'tsundere', '全局人格变更不影响会话快照')
+assert(chat.getConversationSettings().personalityId === 'gentle', '保存设置写入当前会话（conv2 变 gentle）')
 
 assert(chat.openConversation(firstId), '切回旧会话')
 assert(chat.memoryStore.listMemories().length === memCount, '旧会话记忆独立保留')
-assert(chat.getConversationSettings().personalityId === 'gentle', '未快照会话回退全局人格')
+assert(chat.getConversationSettings().personalityId === 'tsundere', '旧会话设置独立保留（不受其他会话影响）')
 assert(storage.getScene() === '旧会话情景', '旧会话情景独立保留')
 
 chat.copyConversationToNew()
@@ -302,10 +302,10 @@ assert(storage.deleteApiProfile(2), '删除第 3 套')
 assert(storage.getApiProfiles().length === 2, '删除后剩 2 套')
 assert(storage.getApiProfile(2) === null, '被删槽位读取为 null')
 assert(storage.deleteApiProfile(9) === false, '越界删除被拒绝')
-// 快速切换：读取预设 → 应用到全局设置
+// 快速切换：读取预设 → 应用到当前会话设置
 const apply = storage.getApiProfile(0)
-chat.saveSettings({ ...chat.getSettings(), ...apply })
-assert(chat.getSettings().model === 'deepseek-chat', '应用预设后全局设置已切换')
+chat.saveSettings({ ...chat.getConversationSettings(), ...apply })
+assert(chat.getConversationSettings().model === 'deepseek-chat', '应用预设后当前会话设置已切换')
 
 console.log('\n[14] SSE 流式响应兜底解析（兼容 Ollama 无视 stream:false）')
 const llm = await import('../utils/llm.js')
@@ -403,17 +403,17 @@ st = await llm.chatCompletion({
 assert(st.text === '降级成功', '400 后移除 reasoning_effort 降级重试成功')
 assert(!('reasoning_effort' in cap15.data), '重试请求不再携带 reasoning_effort')
 
-console.log('\n[16] 会话独立人格设置（仅作用于当前对话）')
+console.log('\n[16] 会话独立设置（仅作用于当前对话）')
 chat.saveConversationPersonality('koishi', '')
 assert(chat.getConversationSettings().personalityId === 'koishi', '当前会话人格已改为 koishi')
-assert(chat.getSettings().personalityId === 'gentle', '全局人格不受影响')
+assert(chat.getSettings().personalityId === 'gentle', '全局默认设置不受影响')
 chat.startNewConversation()
-assert(chat.getConversationSettings().personalityId === 'gentle', '新会话回退全局人格')
+assert(chat.getConversationSettings().personalityId === 'koishi', '新对话复制当前设置（koishi）')
 chat.saveConversationPersonality('custom', '你是暗夜精灵')
 assert(chat.getConversationSettings().personalityId === 'custom', '自定义人格已选中')
 assert(chat.getConversationSettings().customPrompt === '你是暗夜精灵', '自定义提示词已保存')
 assert(chat.openConversation(firstId), '切回第一个会话')
-assert(chat.getConversationSettings().personalityId === 'gentle', '第一个会话人格独立保留（不受其他会话影响）')
+assert(chat.getConversationSettings().personalityId === 'tsundere', '第一个会话设置独立保留（不受其他会话影响）')
 
 console.log('\n[17] 手动新建记忆与多选删除')
 const before17 = ms.listMemories().length
@@ -447,7 +447,7 @@ assert(lastOld.content.includes('测试回复正文'), '正常文本保留')
 assert(!lastOld.content.includes('Scene:') && !lastOld.content.includes('Memory:'), '旧数据标记行在 UI 展示时被剔除')
 
 console.log('\n[20] 回复格式校验与自动重试')
-chat.saveSettings({ ...chat.getSettings(), maxRequestAttempts: 5 })
+chat.saveSettings({ ...chat.getConversationSettings(), maxRequestAttempts: 5 })
 // 第 1 次只输出 Memory 标记、无对话文本 → 自动重试，第 2 次正常
 let failOnce = true
 globalThis.uni.request = (opts) => {
@@ -536,6 +536,77 @@ try {
 assert(threw20, '达到最大请求次数后抛错')
 log20 = logsMod.getLogs()
 assert(log20.some((l) => l.type === 'err' && l.msg.includes('已达请求上限')), '日志记录达上限错误')
+
+console.log('\n[21] 重新生成撤回响应记录的情景与记忆')
+chat.startNewConversation()
+// 准备：已有记忆 + 已有情景，随后响应新增记忆并更新情景
+chat.memoryStore.save('user_fact', '用户养了一只狗', ['狗'], 4, 'L2')
+storage.setScene('用户在客厅')
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '学吉他不错呀！\nScene: 用户在书房练吉他\nMemory: user_preference 用户最近开始学吉他 | keywords:吉他 | importance:4 | level:L2' } }] } })
+}
+let r21 = await chat.sendMessage('我在学吉他')
+assert(r21.saved === 1, '响应新增了 1 条记忆')
+assert(chat.memoryStore.listMemories().some((x) => x.content.includes('吉他')), '响应新增的吉他记忆已入库')
+assert(storage.getScene() === '用户在书房练吉他', '响应更新了情景')
+const rows21 = storage.getChatRows()
+assert(rows21[rows21.length - 1].rollback && typeof rows21[rows21.length - 1].rollback.sceneLenBefore === 'number', 'assistant 行携带回滚信息')
+assert(chat.popLastAssistant() === '我在学吉他', '重新生成返回被撤回的用户消息')
+assert(storage.getScene() === '用户在客厅', '情景已回滚到响应前')
+assert(!chat.memoryStore.listMemories().some((x) => x.content.includes('吉他')), '响应新增的记忆已撤回')
+assert(chat.memoryStore.listMemories().some((x) => x.content.includes('狗')), '原有记忆不受影响')
+const hist21 = chat.getHistoryForUI()
+assert(hist21[hist21.length - 1].content === '我在学吉他', '用户消息保留，assistant 已截断')
+// 修改类记忆回滚：响应修改已有记忆 → 重新生成后恢复原内容
+chat.memoryStore.save('event', '用户正在准备考研', ['考研'], 4, 'L2')
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '恭喜！\nMemory: 修改 用户正在准备考研 → 用户考研已上岸 | importance:5 | level:L1' } }] } })
+}
+await chat.sendMessage('考研出成绩了')
+assert(chat.memoryStore.listMemories().some((x) => x.content === '用户考研已上岸'), '响应已修改记忆')
+chat.popLastAssistant()
+const restored21 = chat.memoryStore.listMemories().find((x) => x.content === '用户正在准备考研')
+assert(!!restored21 && restored21.importance === 4 && restored21.level === 'L2', '重新生成后修改的记忆恢复原内容')
+assert(!chat.memoryStore.listMemories().some((x) => x.content === '用户考研已上岸'), '修改后的内容已撤回')
+// 删除类记忆回滚：响应删除已有记忆 → 重新生成后恢复
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '好的\nMemory: 删除 用户养了一只狗' } }] } })
+}
+await chat.sendMessage('狗送走了')
+assert(!chat.memoryStore.listMemories().some((x) => x.content.includes('狗')), '响应已删除记忆')
+chat.popLastAssistant()
+assert(chat.memoryStore.listMemories().some((x) => x.content.includes('狗')), '重新生成后删除的记忆已恢复')
+
+console.log('\n[22] 虚拟时间模式相对衰减（剧情时刻基准）')
+// 当前会话设为 virtual，再新建会话（复制 virtual 设置、记忆为空），避免残留记忆的访问时间干扰剧情时刻
+chat.saveSettings({ ...chat.getConversationSettings(), timeMode: 'virtual' })
+chat.startNewConversation()
+const st22 = chat.memoryStore
+// 构造两条现实时间 10 天前创建的记忆
+st22.addMemory('虚拟剧情旧记忆A', 4, 'L2')
+st22.addMemory('虚拟剧情旧记忆B', 4, 'L2')
+for (const r of st22.listMemories()) {
+	r.created_at = new Date(Date.now() - 10 * 86400000).toISOString()
+}
+storage.persistMemories()
+// 虚拟模式：无新剧情推进 → 剧情时刻 = 10 天前 → 相对年龄 0 → 不衰减
+const oldA = st22.listMemories().find((r) => r.content === '虚拟剧情旧记忆A')
+assert(st22.effectiveImportance(oldA) >= 3.99, '虚拟模式现实中断 10 天记忆不衰减')
+// 同一条记忆在 real 模式（临时切换会话快照）应正常衰减
+storage.setConversationPersonality({ ...storage.getConversationPersonality(), timeMode: 'real' })
+assert(st22.effectiveImportance(oldA) < 3.99, '同一记忆 real 模式正常衰减')
+storage.setConversationPersonality({ ...storage.getConversationPersonality(), timeMode: 'virtual' })
+// 新记忆产生后，剧情时刻推进 → 旧记忆相对衰减
+st22.addMemory('虚拟剧情新记忆', 4, 'L2')
+const oldB = st22.listMemories().find((r) => r.content === '虚拟剧情旧记忆B')
+const newM = st22.listMemories().find((r) => r.content === '虚拟剧情新记忆')
+assert(st22.effectiveImportance(oldB) < 3.99, '新记忆产生后旧记忆相对衰减')
+assert(st22.effectiveImportance(newM) >= 3.99, '最新记忆不衰减')
+// 时间标签：虚拟模式为相对指示
+assert(st22.formatTime(newM.created_at) === '（较新）', `虚拟模式时间标签为相对指示（${st22.formatTime(newM.created_at)}）`)
 
 console.log('\n================================')
 if (failed === 0) {

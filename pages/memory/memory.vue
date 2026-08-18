@@ -90,7 +90,6 @@
 <script>
 	import { memoryStore, maybeMaintenance } from '../../utils/chat.js'
 	import { getConversations, getActiveConversationId } from '../../utils/storage.js'
-	import { formatMemoryTime } from '../../utils/memory.js'
 
 	export default {
 		data() {
@@ -140,7 +139,7 @@
 				this.load()
 			},
 			fmtTime(iso) {
-				return formatMemoryTime(iso)
+				return memoryStore.formatTime(iso)
 			},
 			openEdit(m) {
 				this.editingId = m.id

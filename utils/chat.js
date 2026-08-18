@@ -22,9 +22,11 @@ import {
 	getConversationCompression,
 	setConversationCompression,
 	getConversationPersonality,
-	setConversationPersonality,
+	getConversationSettingsRaw,
+	setConversationSettingsRaw,
 	duplicateConversationToNew,
-	duplicateMemoriesToNew
+	duplicateMemoriesToNew,
+	truncateSceneHistory
 } from './storage.js'
 import { MemoryStore, parseMemoryLine } from './memory.js'
 import { buildSystemPrompt, buildNowText, getPersonalityById, getPersonaName } from './prompts.js'
@@ -68,13 +70,13 @@ export function personaName(id) {
 	return getPersonaName(id)
 }
 
-/** 当前设置 */
+/** 全局默认设置（无设置快照的会话回退用；设置面板编辑的是当前会话设置） */
 export function getSettings() {
 	const personalityId = getSetting('personalityId', 'gentle')
 	return {
 		baseUrl: getSetting('baseUrl', 'https://api.openai.com/v1'),
 		apiKey: getSetting('apiKey', ''),
-		model: getSetting('model', 'gpt-4o-mini'),
+		model: getSetting('model', 'gpt-5.4-mini'),
 		temperature: parseFloat(getSetting('temperature', '0.8')),
 		reasoningEffort: getSetting('reasoningEffort', 'none'), // 思考模式：none 关闭 / high 开启 / '' 跟随模型（Ollama 等兼容接口经 reasoning_effort 控制）
 		personalityId,
@@ -86,60 +88,67 @@ export function getSettings() {
 	}
 }
 
-/** 保存设置 */
-export function saveSettings(s) {
-	setSetting('baseUrl', (s.baseUrl || '').trim())
-	setSetting('apiKey', (s.apiKey || '').trim())
-	setSetting('model', (s.model || '').trim())
-	setSetting('temperature', String(s.temperature))
-	setSetting('reasoningEffort', s.reasoningEffort || '')
-	setSetting('personalityId', s.personalityId)
-	setSetting('customPrompt', s.customPrompt || '')
-	setSetting('timeMode', s.timeMode === 'virtual' ? 'virtual' : 'real')
-	setSetting('compressInterval', String(s.compressInterval || 0))
-	setSetting('maxRequestAttempts', String(Math.max(1, Math.min(20, parseInt(s.maxRequestAttempts, 10) || 5))))
-}
-
-/**
- * 当前会话生效设置 = 全局 API 配置 + 会话人格快照（快照为空时回退全局人格）。
- * 每个会话独立记忆自己的人格设置，切换会话即切换人格。
- */
-export function getConversationSettings() {
-	const s = getSettings()
-	const p = getConversationPersonality()
-	const personalityId = (p && p.personalityId) || s.personalityId
-	const customPrompt = p && p.customPrompt !== undefined ? p.customPrompt : s.customPrompt
-	const timeMode = (p && p.timeMode) || s.timeMode
+/** 归一化设置对象（saveSettings / saveConversationPersonality / 新对话复制统一调用） */
+function normalizeSettings(s) {
 	return {
-		...s,
-		personalityId,
-		customPrompt,
-		timeMode,
-		personaName: getPersonaName(personalityId)
+		baseUrl: String(s && s.baseUrl ? s.baseUrl : '').trim(),
+		apiKey: String(s && s.apiKey ? s.apiKey : '').trim(),
+		model: String(s && s.model ? s.model : '').trim(),
+		temperature: Number.isFinite(parseFloat(s && s.temperature)) ? parseFloat(s.temperature) : 0.8,
+		reasoningEffort: (s && s.reasoningEffort) || '',
+		personalityId: (s && s.personalityId) || 'gentle',
+		customPrompt: String(s && s.customPrompt ? s.customPrompt : '').trim(),
+		timeMode: s && s.timeMode === 'virtual' ? 'virtual' : 'real',
+		compressInterval: parseInt(s && s.compressInterval, 10) || 0,
+		maxRequestAttempts: Math.max(1, Math.min(20, parseInt(s && s.maxRequestAttempts, 10) || 5))
 	}
 }
 
-/** 把当前全局人格设置快照到当前会话 */
-function snapshotPersonality() {
-	const s = getSettings()
-	setConversationPersonality({
-		personalityId: s.personalityId,
-		customPrompt: s.customPrompt || '',
-		timeMode: s.timeMode
-	})
+/** 保存设置到当前会话（每个对话独享一份设置，设置面板与之同步） */
+export function saveSettings(s) {
+	setConversationSettingsRaw(normalizeSettings(s))
 }
 
 /**
- * 保存当前会话的人格设置（写入会话快照，仅作用于当前对话，不影响全局与其他会话）。
+ * 当前会话生效设置 = 会话设置快照（无快照回退全局；旧数据兼容仅人格子集的快照）。
+ * 每个会话独立一套完整设置，切换会话即切换设置。
+ */
+export function getConversationSettings() {
+	const s = getSettings()
+	const raw = getConversationSettingsRaw()
+	if (raw) {
+		const merged = { ...s, ...raw }
+		merged.temperature = Number.isFinite(parseFloat(raw.temperature)) ? parseFloat(raw.temperature) : s.temperature
+		merged.compressInterval = parseInt(raw.compressInterval, 10) || 0
+		merged.maxRequestAttempts = Math.max(1, Math.min(20, parseInt(raw.maxRequestAttempts, 10) || 5))
+		merged.personaName = getPersonaName(merged.personalityId || s.personalityId)
+		return merged
+	}
+	// 旧数据：会话仅存人格子集（personalityId/customPrompt/timeMode）
+	const p = getConversationPersonality()
+	return {
+		...s,
+		personalityId: (p && p.personalityId) || s.personalityId,
+		customPrompt: p && p.customPrompt !== undefined ? p.customPrompt : s.customPrompt,
+		timeMode: (p && p.timeMode) || s.timeMode,
+		personaName: getPersonaName((p && p.personalityId) || s.personalityId)
+	}
+}
+
+/**
+ * 保存当前会话的人格设置（写入会话设置快照，仅作用于当前对话，不影响其他会话）。
  * timeMode 可选：不传则沿用当前会话生效的模式，保持会话内的情景时间设置不漂移。
  */
 export function saveConversationPersonality(personalityId, customPrompt, timeMode) {
 	const s = getConversationSettings()
-	setConversationPersonality({
-		personalityId,
-		customPrompt: personalityId === 'custom' ? (customPrompt || '') : '',
-		timeMode: timeMode !== undefined ? timeMode : s.timeMode
-	})
+	setConversationSettingsRaw(
+		normalizeSettings({
+			...s,
+			personalityId,
+			customPrompt: personalityId === 'custom' ? (customPrompt || '') : '',
+			timeMode: timeMode !== undefined ? timeMode : s.timeMode
+		})
+	)
 	addLog('info', '会话人格', `${getPersonaName(personalityId)}${personalityId === 'custom' ? '（自定义）' : ''}`)
 }
 
@@ -165,7 +174,7 @@ export function clearConversation() {
 }
 
 /**
- * 移除最后一条助手消息（用户点"重新生成"时调用）。
+ * 移除最后一条助手消息（用户点"重新生成"时调用），同时撤回该响应记录的情景与记忆。
  * 返回被移除的上一条用户消息内容，供重发使用；若无可重发内容则返回空串。
  */
 export function popLastAssistant() {
@@ -182,10 +191,28 @@ export function popLastAssistant() {
 		}
 	}
 	if (cutIdx < 0) return ''
+	// 撤回被重新生成响应的情景与记忆（rollback 信息随 assistant 行落库，旧数据无此字段则跳过）
+	rollbackAssistantEffects(rows[cutIdx])
 	// 移除 cutIdx 及之后所有行（即最新的 assistant + 可能之前的冗余）
 	truncateChat(cutIdx)
 	addLog('info', '重新生成', `截断到第 ${cutIdx} 条消息，重发：${lastUser.slice(0, 20)}`)
 	return lastUser
+}
+
+/** 撤回一条响应记录附带的情景与记忆变更（重新生成前调用） */
+function rollbackAssistantEffects(row) {
+	const rb = row && row.rollback
+	if (!rb) return
+	// 情景：截断到该响应之前的情景历史长度，撤掉本响应新增的情景
+	if (typeof rb.sceneLenBefore === 'number') {
+		truncateSceneHistory(rb.sceneLenBefore)
+	}
+	// 记忆：按写入顺序逆序撤销（新增→删除 / 修改→恢复原值 / 删除→重新插入）
+	const undos = rb.memoryUndos
+	if (Array.isArray(undos) && undos.length) {
+		for (let i = undos.length - 1; i >= 0; i--) memoryStore.applyUndo(undos[i])
+	}
+	addLog('info', '撤回响应情景与记忆', `情景截断到 ${rb.sceneLenBefore}，撤销记忆 ${(undos && undos.length) || 0} 条`)
 }
 
 // ---------- 会话管理 ----------
@@ -200,9 +227,11 @@ export function activeConversationId() {
 	return getActiveConversationId()
 }
 
-/** 开始新对话：当前对话非空则归档并新建，否则复用并重置当前空对话；并快照当前人格设置 */
+/** 开始新对话：当前对话非空则归档并新建，否则复用并重置当前空对话；新对话复制当前设置（每个对话独享一份设置） */
 export function startNewConversation() {
 	memoryStore.resetState()
+	// 记录创建前的当前会话生效设置（含无快照会话的全局回退值），供新对话复制
+	const currentSettings = getConversationSettings()
 	if (getChatRows().length) {
 		createConversation()
 		addLog('info', '开始新对话')
@@ -210,7 +239,7 @@ export function startNewConversation() {
 		clearChat()
 		addLog('info', '重置空对话')
 	}
-	snapshotPersonality()
+	setConversationSettingsRaw(normalizeSettings(currentSettings))
 }
 
 /** 切换到指定会话（记忆与人格随会话切换，重置召回状态） */
@@ -269,7 +298,7 @@ export async function compressContext(force = false) {
 	if (!force && cut - since < COMPRESS_MIN_NEW) return false
 	if (cut <= since) return false
 
-	const s = getSettings()
+	const s = getConversationSettings()
 	if (!s.apiKey || !s.baseUrl || !s.model) return false
 
 	_compressing = true
@@ -324,7 +353,7 @@ export async function compressContext(force = false) {
  */
 export async function maybeCompress() {
 	if (_compressing) return false
-	const interval = getSettings().compressInterval
+	const interval = getConversationSettings().compressInterval
 	if (!interval) return false
 	const { compressedUntil } = getConversationCompression()
 	if (getChatRows().length - compressedUntil < interval) return false
@@ -338,25 +367,27 @@ export async function maybeCompress() {
  * @returns {Promise<{reply:string, saved:number}>} reply 为清理掉 Memory 行后的回复
  */
 export async function sendMessage(userText) {
-	const s = getSettings()
+	// 设置全部取当前会话（每个对话独享一份设置：API 配置 / 人格 / 时间模式等）
+	const s = getConversationSettings()
 	if (!s.apiKey) throw new Error('请先在「设置」中填写 API Key')
 	if (!s.baseUrl) throw new Error('请先在「设置」中填写接口地址')
 	if (!s.model) throw new Error('请先在「设置」中填写模型名称')
+
+	// 记录发送前的情景历史长度：若本响应更新了情景，重新生成时据此撤回
+	const sceneLenBefore = getSceneHistory().length
 
 	// 1. 检索记忆（核心槽 + 新鲜槽 + MMR 多样性槽）
 	const memoryText = memoryStore.retrieveContext(userText)
 	addLog('info', '发送消息', userText.slice(0, 40))
 
 	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆）
-	// 人格/时间模式取当前会话快照；API 配置取全局
-	const conv = getConversationSettings()
 	const personalityPrompt =
-		conv.personalityId === 'custom' ? conv.customPrompt : getPersonalityById(conv.personalityId).prompt
+		s.personalityId === 'custom' ? s.customPrompt : getPersonalityById(s.personalityId).prompt
 	const system = buildSystemPrompt(
 		personalityPrompt || '你是友好的聊天伙伴。',
 		memoryText,
 		getSceneHistory(),
-		conv.timeMode === 'virtual' ? '' : buildNowText()
+		s.timeMode === 'virtual' ? '' : buildNowText()
 	)
 
 	// 3-5. 请求 → 格式校验 → 解析：回复格式不合格时自动重试（上限 maxRequestAttempts）。
@@ -400,9 +431,13 @@ export async function sendMessage(userText) {
 	}
 
 	// 6. 落库对话：落库清理后的文本，Scene/Memory 标记不再混入历史——否则从其它页切回时
-	// 重新加载历史会把标记显示在气泡里（此前 bug），也会污染上下文压缩
+	// 重新加载历史会把标记显示在气泡里（此前 bug），也会污染上下文压缩。
+	// assistant 行附带 rollback 信息（响应前的情景长度 + 本响应的记忆撤销清单），
+	// 重新生成时据此撤回该响应记录的情景与记忆。
 	addChatRow('user', userText)
-	addChatRow('assistant', result.cleanReply || '…')
+	addChatRow('assistant', result.cleanReply || '…', {
+		rollback: { sceneLenBefore, memoryUndos: result.memoryUndos || [] }
+	})
 	if (result.newScene) {
 		setScene(result.newScene)
 		addLog('info', '情景更新', result.newScene)
@@ -461,12 +496,17 @@ function parseAndValidateReply(text) {
 	if (!hasContent) return { ok: false, reason: '回复仅含 Scene/Memory 标记，无对话文本' }
 	const cleanReply = cleanLines.join('\n').trim()
 
-	// 第二步：校验通过，执行写入（Scene 更新情景 / Memory 入库）
+	// 第二步：校验通过，执行写入（Scene 更新情景 / Memory 入库），并收集撤销信息供重新生成回滚
 	let saved = 0
+	const memoryUndos = []
 	for (const line of lines) {
 		if (/^\s*Memory\s*[:：]/i.test(line)) {
-			if (memoryStore.saveFromLine(line)) saved++
+			const undo = memoryStore.saveFromLine(line)
+			if (undo) {
+				saved++
+				memoryUndos.push(undo)
+			}
 		}
 	}
-	return { ok: true, saved, newScene, cleanReply }
+	return { ok: true, saved, newScene, cleanReply, memoryUndos }
 }

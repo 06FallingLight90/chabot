@@ -18,7 +18,7 @@
 			</view>
 			<view class="field">
 				<text class="label">模型</text>
-				<input class="input" v-model="s.model" placeholder="gpt-4o-mini" />
+				<input class="input" v-model="s.model" placeholder="gpt-5.4-mini" />
 			</view>
 			<view class="field">
 				<text class="label">温度 {{ s.temperature }}</text>
@@ -178,7 +178,7 @@
 </template>
 
 <script>
-	import { getConversationSettings, saveSettings, saveConversationPersonality, clearConversation } from '../../utils/chat.js'
+	import { getConversationSettings, saveSettings, clearConversation } from '../../utils/chat.js'
 	import { PERSONALITIES, PROVIDERS } from '../../utils/prompts.js'
 	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage, getApiProfiles, saveApiProfile, deleteApiProfile } from '../../utils/storage.js'
 	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
@@ -225,7 +225,7 @@
 			}
 		},
 		onShow() {
-			// 人格/情景时间随当前对话（会话快照）显示，与聊天页设置保持同步；API 配置仍为全局
+			// 全部设置随当前对话（会话设置快照）显示与保存，切换会话即切换设置
 			this.s = getConversationSettings()
 			this.bg = getBackgroundImage()
 			this.logs = getLogs()
@@ -344,8 +344,7 @@
 					return
 				}
 				saveSettings(this.s)
-				// 人格/情景时间写入当前会话快照，使设置面板与当前对话的人格提示词保持一致
-				saveConversationPersonality(this.s.personalityId, this.s.customPrompt, this.s.timeMode)
+				// saveSettings 写入当前会话的设置快照（含人格/情景时间），仅作用于当前对话
 				addLog(
 					'info',
 					'保存设置',

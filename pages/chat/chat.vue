@@ -344,6 +344,7 @@
 				if (!lastUser) return
 				// 移除本地展示中的最后一条助手消息，然后静默重发上一条用户消息
 				if (this.lastIsAssistant) this.messages.pop()
+				this.scene = getScene() // popLastAssistant 已撤回该响应记录的情景，同步展示
 				this.input = ''
 				this.loading = true
 				sendMessage(lastUser)

@@ -73,7 +73,7 @@ function _makeConversation(title, messages) {
 		updated_at: now,
 		summary: '', // 压缩后的上文概要
 		compressedUntil: 0, // 已压缩并入概要的消息下标（含）
-		personality: null, // 本会话独立的人格设置快照 {personalityId, customPrompt, timeMode}
+		settings: null, // 本会话独立的完整设置快照（null 回退全局设置）
 		scenes: [], // 本会话独立的情景历史（最新在末尾，最多 10 条）
 		memories: [], // 本会话独立的记忆数组
 		messages: messages || []
@@ -116,9 +116,10 @@ export function persistMemories() {
 	_persistConversations()
 }
 
-/** 追加一条对话记录到当前会话并落盘；首条用户消息自动生成会话标题 */
-export function addChatRow(role, content) {
+/** 追加一条对话记录到当前会话并落盘；首条用户消息自动生成会话标题。extra 为可选附加字段（如回复行携带的回滚信息） */
+export function addChatRow(role, content, extra) {
 	const row = { id: _nextId(_chat), role, content, created_at: new Date().toISOString() }
+	if (extra && typeof extra === 'object') Object.assign(row, extra)
 	_chat.push(row)
 	const conv = _activeConversation()
 	if (conv) {
@@ -246,22 +247,53 @@ export function deleteConversation(id) {
 	return true
 }
 
-/** 当前会话的人格设置快照（无则为 null，回退全局设置） */
-export function getConversationPersonality() {
+/** 当前会话的完整设置快照（无则为 null，回退全局设置） */
+export function getConversationSettingsRaw() {
 	const conv = _activeConversation()
-	return (conv && conv.personality) || null
+	return (conv && conv.settings) || null
 }
 
-/** 写入当前会话的人格设置快照 */
-export function setConversationPersonality(p) {
+/** 写入当前会话的完整设置快照（设置面板保存 / 新对话复制当前设置） */
+export function setConversationSettingsRaw(s) {
 	const conv = _activeConversation()
 	if (!conv) return
-	conv.personality = p || null
+	conv.settings = s || null
 	_persistConversations()
 }
 
 /**
- * 复制当前会话到新会话（消息 + 记忆 + 概要 + 人格快照，标题加"副本"后缀）并切换。
+ * 当前会话的人格子集（含 timeMode）：完整快照存在则取其子集；
+ * 旧数据（仅有人格快照无完整设置）回退 legacy personality 字段。
+ */
+export function getConversationPersonality() {
+	const conv = _activeConversation()
+	if (!conv) return null
+	if (conv.settings) {
+		return {
+			personalityId: conv.settings.personalityId,
+			customPrompt: conv.settings.customPrompt,
+			timeMode: conv.settings.timeMode
+		}
+	}
+	return conv.personality || null
+}
+
+/** 写入当前会话的人格子集：完整快照存在则原地更新，否则写旧版 personality 字段 */
+export function setConversationPersonality(p) {
+	const conv = _activeConversation()
+	if (!conv) return
+	if (conv.settings) {
+		conv.settings.personalityId = p.personalityId
+		conv.settings.customPrompt = p.customPrompt
+		conv.settings.timeMode = p.timeMode
+	} else {
+		conv.personality = p || null
+	}
+	_persistConversations()
+}
+
+/**
+ * 复制当前会话到新会话（消息 + 记忆 + 概要 + 设置快照，标题加"副本"后缀）并切换。
  * @returns {object} 新会话
  */
 export function duplicateConversationToNew() {
@@ -272,13 +304,15 @@ export function duplicateConversationToNew() {
 		memories: (conv.memories || []).map((m) => ({ ...m })),
 		summary: conv.summary,
 		compressedUntil: conv.compressedUntil,
-		personality: conv.personality ? { ...conv.personality } : null,
+		settings: conv.settings ? { ...conv.settings } : null,
+		personality: conv.personality ? { ...conv.personality } : null, // 旧数据兜底
 		scenes: (conv.scenes || []).slice()
 	}
 	const nu = _makeConversation(src.title ? src.title + '（副本）' : '', src.messages)
 	nu.memories = src.memories
 	nu.summary = src.summary
 	nu.compressedUntil = src.compressedUntil
+	nu.settings = src.settings
 	nu.personality = src.personality
 	nu.scenes = src.scenes
 	_conversations.unshift(nu)
@@ -290,12 +324,13 @@ export function duplicateConversationToNew() {
 	return nu
 }
 
-/** 仅复制当前会话的记忆到新会话（含人格快照）并切换 */
+/** 仅复制当前会话的记忆到新会话（含设置快照）并切换 */
 export function duplicateMemoriesToNew() {
 	const conv = _activeConversation()
 	const nu = _makeConversation('', [])
 	nu.memories = (conv.memories || []).map((m) => ({ ...m }))
-	nu.personality = conv.personality ? { ...conv.personality } : null
+	nu.settings = conv.settings ? { ...conv.settings } : null
+	nu.personality = conv.personality ? { ...conv.personality } : null // 旧数据兜底
 	_conversations.unshift(nu)
 	_activeConvId = nu.id
 	_chat = nu.messages
@@ -386,6 +421,16 @@ export function setScene(v) {
 	_persistConversations()
 }
 
+/** 情景历史截断到指定长度（重新生成时撤回该响应记录的情景） */
+export function truncateSceneHistory(len) {
+	const conv = _activeConversation()
+	if (!conv || !Array.isArray(conv.scenes)) return
+	if (conv.scenes.length > len) {
+		conv.scenes = conv.scenes.slice(0, Math.max(0, len))
+		_persistConversations()
+	}
+}
+
 // ---------- API 配置预设（最多 3 套） ----------
 
 const KEY_API_PROFILES = 'chabot_setting_api_profiles'
@@ -461,7 +506,7 @@ export function removeBackgroundImage() {
 	setSetting('bgImage', '')
 	if (old) {
 		// #ifdef APP-PLUS || MP-WEIXIN
-		uni.removeSavedFile({ filePath: old, fail: () => {} })
+		uni.removeSavedFile({ filePath: old, fail: () => { } })
 		// #endif
 	}
 }
@@ -491,7 +536,7 @@ export async function saveBackgroundImage(tempPath) {
 	setSetting('bgImage', saved)
 	if (old && old !== saved) {
 		// #ifdef APP-PLUS || MP-WEIXIN
-		uni.removeSavedFile({ filePath: old, fail: () => {} })
+		uni.removeSavedFile({ filePath: old, fail: () => { } })
 		// #endif
 	}
 	return saved

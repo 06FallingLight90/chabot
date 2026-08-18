@@ -7,7 +7,7 @@
  * - 维护：L3 过期清理、L2→L3 降级、容量淘汰
  */
 
-import { getMemories, replaceMemories, persistMemories, nextMemoryId } from './storage.js'
+import { getMemories, replaceMemories, persistMemories, nextMemoryId, getConversationPersonality, getSetting } from './storage.js'
 
 const MAX_MEMORIES = 200 // 记忆最大容量
 const RECALL_COUNT = 10 // 每次对话召回的记忆条数
@@ -51,7 +51,6 @@ const STOP_WORDS = new Set([
 ])
 
 const nowIso = () => new Date().toISOString()
-const daysAgoIso = (d) => new Date(Date.now() - d * 86400000).toISOString()
 
 // ---------- 轻量文本相似度 ----------
 function charNGrams(text, n = 2) {
@@ -120,17 +119,48 @@ export class MemoryStore {
 		return v === undefined ? 45 : v
 	}
 
-	/** 回忆强化因子：刚被访问时 >1，随时间衰减回 1.0 */
+	/** 虚拟时间模式：会话人格快照 timeMode 优先，回退全局设置（与 getConversationSettings 一致） */
+	_isVirtual() {
+		const p = getConversationPersonality()
+		return ((p && p.timeMode) || getSetting('timeMode', 'real')) === 'virtual'
+	}
+
+	/**
+	 * 剧情当前时刻（虚拟模式专用）：所有记忆 last_accessed_at || created_at 的最大值，
+	 * 即"最新或最近被使用的一段记忆"。无记忆时回退当前时间。
+	 */
+	_decayRef() {
+		let ref = 0
+		for (const r of this._rows()) {
+			const t = Date.parse(r.last_accessed_at || r.created_at || '')
+			if (!Number.isNaN(t) && t > ref) ref = t
+		}
+		return ref || Date.now()
+	}
+
+	/** 记忆时间标签：real 模式显示真实时间；virtual 模式按剧情时刻相对指示 */
+	formatTime(iso) {
+		if (!this._isVirtual()) return formatMemoryTime(iso)
+		const t = Date.parse(iso)
+		if (Number.isNaN(t)) return ''
+		const ageDays = Math.max(0, (this._decayRef() - t) / 86400000)
+		if (ageDays < 0.5) return '（较新）'
+		if (ageDays < 7) return `（约${Math.max(1, Math.round(ageDays))}天前）`
+		return '（较早）'
+	}
+
+	/** 回忆强化因子：刚被访问时 >1，随时间衰减回 1.0（virtual 模式相对剧情时刻） */
 	_recencyFactor(row) {
 		if (!row.last_accessed_at) return 1
 		const t = Date.parse(row.last_accessed_at)
 		if (Number.isNaN(t)) return 1
-		const ageDays = (Date.now() - t) / 86400000
+		const ref = this._isVirtual() ? this._decayRef() : Date.now()
+		const ageDays = Math.max(0, (ref - t) / 86400000)
 		const bonus = RECALL_BONUS_MAX * Math.pow(0.5, ageDays / RECALL_BONUS_TAU_DAYS)
 		return 1 + bonus
 	}
 
-	/** 有效重要性 = 基础分 × 时间半衰期衰减 × 回忆强化 */
+	/** 有效重要性 = 基础分 × 时间半衰期衰减 × 回忆强化（real 按现实时间；virtual 按剧情时刻相对衰减） */
 	effectiveImportance(row) {
 		const base = row.importance || 3
 		let decay = 1
@@ -138,7 +168,8 @@ export class MemoryStore {
 		if (hl !== Infinity) {
 			const t = Date.parse(row.created_at || '')
 			if (!Number.isNaN(t)) {
-				const ageDays = (Date.now() - t) / 86400000
+				const ref = this._isVirtual() ? this._decayRef() : Date.now()
+				const ageDays = Math.max(0, (ref - t) / 86400000)
 				decay = Math.pow(0.5, ageDays / hl)
 			}
 		}
@@ -170,43 +201,55 @@ export class MemoryStore {
 		this._enforceCapacity()
 	}
 
+	/**
+	 * 新增/合并记忆，返回撤销信息（供重新生成回滚）：
+	 * 新增 → {op:'remove', id}；合并/冷却加权 → {op:'restore', id, before}；无变化 → null
+	 */
 	save(category, content, keywords, importance = 3, level = 'L2') {
-		if (!content || !String(content).trim()) return
+		if (!content || !String(content).trim()) return null
 		const existing = this._keywordFindSimilar(content, keywords)[0]
 		if (existing) {
+			const before = this._snapshotFields(existing)
 			const textSim = computeSimilarity(content, existing.content)
 			// 仅近似重复(≥0.85)受冷却限制；中等相似视为合理更新，允许合并
-			if (textSim >= DUPLICATE_THRESHOLD && this._isInCooldown(existing.id, content)) return
+			if (textSim >= DUPLICATE_THRESHOLD && this._isInCooldown(existing.id, content)) {
+				// 冷却拦截时仅可能发生 importance 加权，返回恢复撤销
+				return this._restoreUndo(before, existing)
+			}
 			const merged = this._doMerge(existing, content, keywords, importance, level)
 			Object.assign(existing, merged)
 			persistMemories()
-		} else {
-			getMemories().push({
-				id: nextMemoryId(),
-				category,
-				content,
-				keywords: (keywords || []).join(','),
-				importance,
-				level,
-				created_at: nowIso(),
-				last_accessed_at: null,
-				access_count: 0
-			})
-			persistMemories()
+			this._enforceCapacity()
+			return this._restoreUndo(before, existing)
 		}
+		const row = {
+			id: nextMemoryId(),
+			category,
+			content,
+			keywords: (keywords || []).join(','),
+			importance,
+			level,
+			created_at: nowIso(),
+			last_accessed_at: null,
+			access_count: 0
+		}
+		getMemories().push(row)
+		persistMemories()
 		this._enforceCapacity()
+		return { op: 'remove', id: row.id }
 	}
 
 	/**
-	 * 解析 LLM 输出的 Memory 行并保存（先经 parseMemoryLine 格式校验，非法返回 false）。
+	 * 解析 LLM 输出的 Memory 行并保存（先经 parseMemoryLine 格式校验，非法返回 null）。
 	 * 兼容三种操作：
 	 *   Memory: 类别 内容 | keywords:.. | importance:.. | level:..   ← 新增
 	 *   Memory: 修改 原内容 → 新内容 | keywords:.. | ...              ← 修改
 	 *   Memory: 删除 原内容                                            ← 删除
+	 * 返回值即撤销信息（truthy=已执行写入，供重新生成回滚；null=未写入）。
 	 */
 	saveFromLine(line) {
 		const parsed = parseMemoryLine(line)
-		if (!parsed) return false
+		if (!parsed) return null
 		if (parsed.action === 'delete') return this._deleteByContent(parsed.content)
 		if (parsed.action === 'modify') return this._modifyByContent(parsed.oldContent, parsed.rest)
 
@@ -232,8 +275,7 @@ export class MemoryStore {
 		if (level === 'L1' && importance < 3) importance = 3
 		if (level === 'L3' && importance > 4) importance = 4
 		if (importance <= 2 && level !== 'L1') level = 'L3'
-		this.save(parsed.category, content, keywords, importance, level)
-		return true
+		return this.save(parsed.category, content, keywords, importance, level)
 	}
 
 	/** 按内容查找记忆（逐字匹配），返回 row 或 null */
@@ -241,24 +283,26 @@ export class MemoryStore {
 		return this._rows().find((r) => r.content === content) || null
 	}
 
-	/** 删除指定内容的记忆 */
+	/** 删除指定内容的记忆，返回撤销信息 {op:'reinsert', row}（未命中返回 null） */
 	_deleteByContent(content) {
 		const rows = this._rows()
 		const idx = rows.findIndex((r) => r.content === content)
-		if (idx < 0) return false
+		if (idx < 0) return null
+		const row = rows[idx]
 		rows.splice(idx, 1)
 		persistMemories()
-		return true
+		return { op: 'reinsert', row: { ...row } }
 	}
 
-	/** 修改：找到原内容 → 替换为新内容+新参数 */
+	/** 修改：找到原内容 → 替换为新内容+新参数，返回撤销信息 {op:'restore', id, before}（未命中返回 null） */
 	_modifyByContent(oldContent, rest) {
 		const row = this._findByContent(oldContent)
-		if (!row) return false
+		if (!row) return null
+		const before = this._snapshotFields(row)
 		// 解析 rest：新内容 + 可选 | keywords:.. | importance:.. | level:..
 		const parts = rest.split('|').map((p) => p.trim()).filter(Boolean)
 		const newContent = parts[0] || ''
-		if (!newContent) return false
+		if (!newContent) return null
 		let keywords = []
 		let importance = row.importance
 		let level = row.level
@@ -285,7 +329,7 @@ export class MemoryStore {
 			level
 		})
 		persistMemories()
-		return true
+		return this._restoreUndo(before, row)
 	}
 
 	/** 合并策略：保留较长内容、合并关键词、取较高 level */
@@ -301,6 +345,50 @@ export class MemoryStore {
 
 	_mergeLevel(a, b) {
 		return (LEVEL_ORDER[a] || 1) <= (LEVEL_ORDER[b] || 1) ? a : b
+	}
+
+	// ---------- 撤销（重新生成回滚用） ----------
+	/** 记忆字段快照（供恢复类撤销使用） */
+	_snapshotFields(row) {
+		return {
+			id: row.id,
+			content: row.content,
+			keywords: row.keywords,
+			importance: row.importance,
+			level: row.level
+		}
+	}
+
+	/** 比较 before/after 字段，有变化才返回恢复类撤销 */
+	_restoreUndo(before, after) {
+		const changed =
+			before.content !== after.content ||
+			before.keywords !== after.keywords ||
+			before.importance !== after.importance ||
+			before.level !== after.level
+		return changed ? { op: 'restore', id: before.id, before } : null
+	}
+
+	/**
+	 * 应用一条撤销信息，撤回某次响应写入的记忆：
+	 * remove（撤回新增）/ restore（撤回修改/合并）/ reinsert（撤回删除）
+	 */
+	applyUndo(undo) {
+		if (!undo) return
+		if (undo.op === 'remove') {
+			this.deleteMemories([undo.id])
+		} else if (undo.op === 'restore') {
+			const r = this._rows().find((x) => x.id === undo.id)
+			if (r) {
+				Object.assign(r, undo.before)
+				persistMemories()
+			}
+		} else if (undo.op === 'reinsert') {
+			const rows = this._rows()
+			if (rows.some((x) => x.id === undo.row.id)) return
+			rows.push(undo.row)
+			persistMemories()
+		}
 	}
 
 	/** 召回冷却：冷却期内再次保存 → 拦截 + 复读加权（importance 奖励，有上限） */
@@ -418,9 +506,10 @@ export class MemoryStore {
 		return picked
 	}
 
-	/** 新鲜记忆：最近 N 小时内的记忆 */
+	/** 新鲜记忆：最近 N 小时内的记忆（virtual 模式相对剧情时刻） */
 	queryRecent(hours = 24, limit = 3) {
-		const since = new Date(Date.now() - hours * 3600000).toISOString()
+		const ref = this._isVirtual() ? this._decayRef() : Date.now()
+		const since = new Date(ref - hours * 3600000).toISOString()
 		const picked = this._rows()
 			.filter((r) => (r.created_at || '') >= since)
 			.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
@@ -478,7 +567,7 @@ export class MemoryStore {
 		const lines = []
 		for (const m of results) {
 			const tag = this.effectiveImportance(m) >= 3.5 ? '（重要）' : ''
-			lines.push(`- ${m.content}${formatMemoryTime(m.created_at)}${tag}`)
+			lines.push(`- ${m.content}${this.formatTime(m.created_at)}${tag}`)
 		}
 		const blocked = this.getRecentlyBlocked()
 		if (blocked.length) {
@@ -493,8 +582,9 @@ export class MemoryStore {
 	touch(items) {
 		if (!items || !items.length) return
 		const idSet = new Set(items.map((x) => (typeof x === 'number' ? x : x.id)))
-		const now = Date.now()
 		const iso = nowIso()
+		// virtual 模式：升级窗口以本次访问前的剧情时刻为基准，现实中断不计入
+		const ref = this._isVirtual() ? this._decayRef() : Date.now()
 		let changed = false
 		for (const r of this._rows()) {
 			if (idSet.has(r.id)) {
@@ -505,7 +595,7 @@ export class MemoryStore {
 		}
 		if (!changed) return
 		persistMemories()
-		this._maybePromoteL3(idSet, now)
+		this._maybePromoteL3(idSet, ref)
 	}
 
 	/** L3 短时间高频访问 → 升级 L2 */
@@ -550,25 +640,28 @@ export class MemoryStore {
 		return r.last_accessed_at || r.created_at
 	}
 
-	/** 容量控制：L3 过期硬清理 → 超容量按有效重要性淘汰低权重 */
+	/** 容量控制：L3 过期硬清理 → 超容量按有效重要性淘汰低权重（virtual 模式过期基准为剧情时刻） */
 	_enforceCapacity() {
 		let rows = this._rows()
+		// virtual 模式：以剧情时刻为基准计算过期线，现实中断不触发清理
+		const ref = this._isVirtual() ? this._decayRef() : Date.now()
+		const refAgo = (d) => new Date(ref - d * 86400000).toISOString()
 		if (rows.length <= MAX_MEMORIES) {
 			// 未超容量，仅做 L3 过期硬清理
-			const cutoff = daysAgoIso(L3_EXPIRE_DAYS)
+			const cutoff = refAgo(L3_EXPIRE_DAYS)
 			const kept = rows.filter((r) => !(r.level === 'L3' && this._lastAccess(r) < cutoff))
 			if (kept.length !== rows.length) replaceMemories(kept)
 			return
 		}
 		// 阶段0：L3 硬清理
-		let cutoff = daysAgoIso(L3_EXPIRE_DAYS)
+		let cutoff = refAgo(L3_EXPIRE_DAYS)
 		rows = rows.filter((r) => !(r.level === 'L3' && this._lastAccess(r) < cutoff))
 		if (rows.length <= MAX_MEMORIES) {
 			replaceMemories(rows)
 			return
 		}
 		// 阶段1：删除超过 1 天且访问 ≤1 的 L3
-		const dayAgo = daysAgoIso(1)
+		const dayAgo = refAgo(1)
 		rows = rows.filter((r) => !(r.level === 'L3' && this._lastAccess(r) < dayAgo && (r.access_count || 0) <= 1))
 		// 阶段2：按有效重要性升序淘汰低权重（L2/L1 importance<5），不足再兜底 importance=5 的 L2
 		if (rows.length > MAX_MEMORIES) {
