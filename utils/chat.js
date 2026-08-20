@@ -85,6 +85,7 @@ export function getSettings() {
 		timeMode: getSetting('timeMode', 'real'), // 情景时间模式：real 现实时间 / virtual 虚拟时间
 		compressInterval: parseInt(getSetting('compressInterval', '0'), 10) || 0, // 自动压缩间隔（条），0=关闭
 		maxRequestAttempts: parseInt(getSetting('maxRequestAttempts', '5'), 10) || 5, // 回复格式不合格时的最大请求次数（重试上限）
+		emojiEnabled: getSetting('emojiEnabled', true) !== false, // 聊天表情包开关：关闭后请求不携带表情清单
 		personaName: getPersonaName(personalityId)
 	}
 }
@@ -101,7 +102,8 @@ function normalizeSettings(s) {
 		customPrompt: String(s && s.customPrompt ? s.customPrompt : '').trim(),
 		timeMode: s && s.timeMode === 'virtual' ? 'virtual' : 'real',
 		compressInterval: parseInt(s && s.compressInterval, 10) || 0,
-		maxRequestAttempts: Math.max(1, Math.min(20, parseInt(s && s.maxRequestAttempts, 10) || 5))
+		maxRequestAttempts: Math.max(1, Math.min(20, parseInt(s && s.maxRequestAttempts, 10) || 5)),
+		emojiEnabled: !s || s.emojiEnabled !== false
 	}
 }
 
@@ -423,7 +425,8 @@ export async function sendMessage(userText, opts = {}) {
 		memoryText,
 		getSceneHistory(),
 		s.timeMode === 'virtual' ? '' : buildNowText(),
-		emojiListForPrompt() // 表情清单为空时 buildSystemPrompt 不注入表情包规则
+		// 表情包开关：禁用时不传清单（buildSystemPrompt 不注入表情包规则，LLM 不会主动使用表情）
+		s.emojiEnabled ? emojiListForPrompt() : []
 	)
 
 	// 3-5. 请求 → 格式校验 → 解析：回复格式不合格时自动重试（上限 maxRequestAttempts）。

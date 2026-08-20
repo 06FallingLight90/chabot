@@ -37,6 +37,13 @@ const CHAT_GUIDE = `[对话规则]
 - [情景]每次判断输出 Scene 行
 - 不暴露记忆/情景机制`
 
+/** 自定义人格的完整设定示例（供用户参考或一键填入后修改） */
+export const CUSTOM_PROMPT_SAMPLE = `你是沉稳可靠的学长，温和耐心、值得信赖。
+- 自称"我"，称呼对方"你"
+- 语气平和从容，说话条理清晰
+- 善于倾听，遇到困难会给出稳妥的建议
+- 单次回复 1-3 句，口语化自然`
+
 /**
  * 构建完整的 system prompt
  * @param {string} personalityPrompt 人格提示词

@@ -17,7 +17,8 @@
 			<text class="scene-text">{{ scene }}</text>
 		</view>
 
-		<view class="msg-wrap">
+		<!-- 点击消息区任意位置收起表情栏（QQ 式交互） -->
+		<view class="msg-wrap" @tap="closeEmojiPanel">
 			<scroll-view
 				scroll-y
 				class="msg-list"
@@ -76,13 +77,14 @@
 				:disabled="loading"
 				placeholder="输入消息…"
 				@confirm="send"
+				@focus="onInputFocus"
 			/>
 			<text class="emoji-btn" :class="{ on: showEmojiPanel }" @tap="toggleEmojiPanel">表情</text>
 			<button class="send-btn" :disabled="loading || !input.trim()" @tap="send">发送</button>
 		</view>
 
-		<!-- 表情栏：展示全部表情，点击插入 $表情名$ 占位 -->
-		<view v-if="showEmojiPanel" class="emoji-panel">
+		<!-- 表情栏：展示全部表情，点击插入 $表情名$ 占位；常驻渲染，展开/收起带平滑过渡 -->
+		<view class="emoji-panel" :class="{ 'panel-open': showEmojiPanel }">
 			<scroll-view scroll-y class="emoji-list">
 				<view class="emoji-grid">
 					<view v-if="!emojis.length" class="emoji-empty">还没有表情包，点下方「上传表情」添加</view>
@@ -192,16 +194,35 @@
 						:class="{ active: personaDraftId === p.id }"
 						@tap="pickPersona(p.id)"
 					>
-						<view class="persona-item-name">{{ p.name }}</view>
-						<view class="persona-item-desc">{{ p.desc }}</view>
+						<view class="persona-item-head">
+							<view class="persona-item-main">
+								<view class="persona-item-name">{{ p.name }}</view>
+								<view class="persona-item-desc">{{ p.desc }}</view>
+							</view>
+							<text class="persona-item-expand" @tap.stop="togglePersonaPrompt(p.id)">
+								{{ personaExpandedId === p.id ? '收起提示词' : '查看提示词' }}
+							</text>
+						</view>
+						<view v-if="personaExpandedId === p.id" class="persona-item-prompt">{{ p.prompt }}</view>
 					</view>
 					<view
 						class="persona-item"
 						:class="{ active: personaDraftId === 'custom' }"
 						@tap="pickPersona('custom')"
 					>
-						<view class="persona-item-name">自定义</view>
-						<view class="persona-item-desc">手写专属人格提示词</view>
+						<view class="persona-item-head">
+							<view class="persona-item-main">
+								<view class="persona-item-name">自定义</view>
+								<view class="persona-item-desc">手写专属人格提示词</view>
+							</view>
+							<text class="persona-item-expand" @tap.stop="togglePersonaPrompt('__sample__')">
+								{{ personaExpandedId === '__sample__' ? '收起示例' : '查看完整示例' }}
+							</text>
+						</view>
+						<view v-if="personaExpandedId === '__sample__'" class="persona-item-prompt">
+							<text>{{ samplePrompt }}</text>
+							<view class="prompt-fill" @tap.stop="fillSample">填入此示例</view>
+						</view>
 					</view>
 				</scroll-view>
 				<textarea
@@ -239,7 +260,7 @@
 	} from '../../utils/chat.js'
 	import { getBackgroundImage, getScene, setScene, getSceneHistory } from '../../utils/storage.js'
 	import { formatMemoryTime } from '../../utils/memory.js'
-	import { PERSONALITIES } from '../../utils/prompts.js'
+	import { PERSONALITIES, CUSTOM_PROMPT_SAMPLE } from '../../utils/prompts.js'
 	import { exportChatToFile } from '../../utils/export.js'
 	import { getEmojis, addEmoji, splitEmojiText } from '../../utils/emojis.js'
 
@@ -272,11 +293,15 @@
 				showPersona: false,      // 会话人格弹窗
 				personaDraftId: '',      // 弹窗中选择的人格 id
 				personaDraftPrompt: '',  // 自定义人格提示词草稿
+				personaExpandedId: '',   // 弹窗中当前展开查看提示词/示例的人格 id
+				samplePrompt: CUSTOM_PROMPT_SAMPLE, // 自定义人格完整设定示例
 				emojis: [],              // 全局表情列表（表情栏展示）
 				showEmojiPanel: false,   // 表情栏展开状态
 				showEmojiName: false,    // 上传表情名称输入弹窗
 				emojiNameDraft: '',      // 表情名输入草稿
-				emojiPendingSrc: ''      // 待保存的图片临时路径
+				emojiPendingSrc: '',     // 待保存的图片临时路径
+				kbH: 0,                  // 键盘高度（px，App/小程序经 onKeyboardHeightChange 监听）
+				pendingClosePanel: false // 表情栏打开时点了输入框，等键盘弹出后再关闭（非模板字段）
 			}
 		},
 		computed: {
@@ -327,6 +352,31 @@
 			this._lastScrollTop = 0
 			this._touchY = null
 		},
+		onLoad() {
+			// 监听键盘高度（App / 微信小程序）：表情栏打开时唤起键盘，等键盘弹出
+			// （视口已压缩）后再关闭表情栏，输入栏直接从"表情栏上方"落到"键盘上方"，不掉底
+			// #ifdef APP-PLUS || MP-WEIXIN
+			if (uni.onKeyboardHeightChange) {
+				this._kbSupported = true
+				uni.onKeyboardHeightChange(this.onKbChange)
+			}
+			// #endif
+			// H5：键盘弹出/收起会触发 window resize，借此让消息列表重新对齐底部，
+			// 避免底部消息被键盘/表情栏遮挡
+			// #ifdef H5
+			this._onWinResize = () => this.scrollBottom()
+			window.addEventListener('resize', this._onWinResize)
+			// #endif
+		},
+		onUnload() {
+			this._unloaded = true
+			// #ifdef MP-WEIXIN
+			if (uni.offKeyboardHeightChange) uni.offKeyboardHeightChange(this.onKbChange)
+			// #endif
+			// #ifdef H5
+			if (this._onWinResize) window.removeEventListener('resize', this._onWinResize)
+			// #endif
+		},
 		onReady() {
 			this.querySlider()
 		},
@@ -343,12 +393,47 @@
 			},
 			toggleEmojiPanel() {
 				if (this.showEmojiPanel) {
-					this.showEmojiPanel = false
+					this.closeEmojiPanel()
 					return
 				}
 				this.refreshEmojis()
 				this.showEmojiPanel = true
 				this.hideKeyboard()
+				// 表情栏展开动画结束后滚动到底部，让最新消息不被表情栏遮挡
+				setTimeout(() => this.scrollBottom(), 300)
+			},
+			// 收起表情栏：点击消息区 / 点击表情按钮关闭
+			closeEmojiPanel() {
+				this.showEmojiPanel = false
+				this.pendingClosePanel = false
+			},
+			// 点击输入框唤起键盘：
+			// - 表情栏没开：直接输入，无需处理
+			// - 表情栏开着：不立即关闭（输入栏会先掉到屏幕底部，键盘弹出前出现被遮挡的瞬间），
+			//   等键盘弹出（onKeyboardHeightChange 上报高度、视口已压缩）后再关闭，
+			//   输入栏直接从"表情栏上方"落到"键盘上方"
+			onInputFocus() {
+				if (!this.showEmojiPanel) return
+				if (this._kbSupported) {
+					this.pendingClosePanel = true
+				} else {
+					// 兜底：键盘高度监听不可用（如 H5），延迟关闭等键盘弹出
+					setTimeout(() => this.closeEmojiPanel(), 300)
+				}
+			},
+			// 键盘高度变化：App/小程序上报后，若等待关闭表情栏则在此关闭；
+			// 键盘弹出压缩视口后让消息列表对齐底部，避免底部消息被键盘遮挡
+			onKbChange(res) {
+				if (this._unloaded) return
+				const h = res && res.height ? res.height : 0
+				this.kbH = h
+				if (h > 0) {
+					if (this.pendingClosePanel) {
+						this.pendingClosePanel = false
+						this.closeEmojiPanel()
+					}
+					setTimeout(() => this.scrollBottom(), 300)
+				}
 			},
 			hideKeyboard() {
 				// #ifdef H5
@@ -503,6 +588,7 @@
 				const s = getConversationSettings()
 				this.personaDraftId = s.personalityId
 				this.personaDraftPrompt = s.customPrompt || ''
+				this.personaExpandedId = ''
 				this.showPersona = true
 			},
 			closePersona() {
@@ -510,6 +596,15 @@
 			},
 			pickPersona(id) {
 				this.personaDraftId = id
+			},
+			// 弹窗中展开/收起预设人格提示词或自定义示例
+			togglePersonaPrompt(id) {
+				this.personaExpandedId = this.personaExpandedId === id ? '' : id
+			},
+			// 一键把完整示例填入自定义提示词编辑框
+			fillSample() {
+				this.personaDraftPrompt = CUSTOM_PROMPT_SAMPLE
+				uni.showToast({ title: '已填入示例，可在此基础上修改', icon: 'none' })
 			},
 			savePersona() {
 				if (this.personaDraftId === 'custom' && !this.personaDraftPrompt.trim()) {
@@ -572,6 +667,7 @@
 					this.activeConvId = id
 					this.messages = getHistoryForUI()
 					this.scene = getScene()
+					this.refreshHeader() // 顶部栏人格名/模型名随会话切换更新
 					this.showHistory = false
 					this.scrollBottom()
 				}
@@ -588,6 +684,7 @@
 						if (wasActive) {
 							this.messages = getHistoryForUI()
 							this.scene = getScene()
+							this.refreshHeader() // 删除当前会话后切到别的会话，顶部栏同步刷新
 						}
 					}
 				})
@@ -875,8 +972,17 @@
 
 	/* ---- 表情栏 ---- */
 	.emoji-panel {
+		overflow: hidden;
+		max-height: 0;
+		opacity: 0;
+		transition: max-height 0.25s ease, opacity 0.25s ease;
 		background: #ffffff;
 		border-top: 1rpx solid #eee;
+	}
+
+	.emoji-panel.panel-open {
+		max-height: 520rpx;
+		opacity: 1;
 	}
 
 	.emoji-list {
@@ -1263,6 +1369,47 @@
 		font-size: 22rpx;
 		color: #999;
 		margin-top: 4rpx;
+	}
+
+	.persona-item-head {
+		display: flex;
+		align-items: flex-start;
+	}
+
+	.persona-item-main {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.persona-item-expand {
+		flex-shrink: 0;
+		margin-left: 16rpx;
+		padding-top: 2rpx;
+		font-size: 22rpx;
+		color: #5b7cfa;
+	}
+
+	.persona-item-prompt {
+		margin-top: 14rpx;
+		padding: 16rpx;
+		background: #fff;
+		border-radius: 10rpx;
+		border: 1rpx solid #e5e6eb;
+		font-size: 22rpx;
+		color: #666;
+		line-height: 1.7;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.prompt-fill {
+		margin-top: 14rpx;
+		display: inline-block;
+		font-size: 22rpx;
+		color: #5b7cfa;
+		border: 1rpx solid #5b7cfa;
+		border-radius: 22rpx;
+		padding: 6rpx 20rpx;
 	}
 
 	.persona-custom {

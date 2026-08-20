@@ -77,6 +77,18 @@
 					{{ s.timeMode === 'real' ? '会发送当前真实时间，LLM 据此维护现实情景' : '不发送真实时间，情景由 LLM 自由想象（适合角色扮演）' }}
 				</view>
 			</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">聊天表情包</text>
+					<view class="mode-btns">
+						<view class="mode-btn" :class="{ on: s.emojiEnabled }" @tap="s.emojiEnabled = true">允许</view>
+						<view class="mode-btn" :class="{ on: !s.emojiEnabled }" @tap="s.emojiEnabled = false">禁用</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">
+					允许时请求携带表情清单，LLM 回复可在文本中穿插使用你的表情包；禁用后请求不携带清单，LLM 不会主动使用表情包（你仍可手动插入表情）。
+				</view>
+			</view>
 			<view
 				v-for="p in personalities"
 				:key="p.id"
@@ -84,16 +96,35 @@
 				:class="{ active: s.personalityId === p.id }"
 				@tap="selectPersona(p.id)"
 			>
-				<view class="persona-name">{{ p.name }}</view>
-				<view class="persona-desc">{{ p.desc }}</view>
+				<view class="persona-head">
+					<view class="persona-main">
+						<view class="persona-name">{{ p.name }}</view>
+						<view class="persona-desc">{{ p.desc }}</view>
+					</view>
+					<text class="persona-expand" @tap.stop="togglePersonaPrompt(p.id)">
+						{{ expandedPromptId === p.id ? '收起提示词' : '查看提示词' }}
+					</text>
+				</view>
+				<view v-if="expandedPromptId === p.id" class="persona-prompt">{{ p.prompt }}</view>
 			</view>
 			<view
 				class="persona"
 				:class="{ active: s.personalityId === 'custom' }"
 				@tap="selectPersona('custom')"
 			>
-				<view class="persona-name">自定义</view>
-				<view class="persona-desc">手写你的专属人格提示词</view>
+				<view class="persona-head">
+					<view class="persona-main">
+						<view class="persona-name">自定义</view>
+						<view class="persona-desc">参考下方示例或预设人格的提示词，手写你的专属设定</view>
+					</view>
+					<text class="persona-expand" @tap.stop="togglePersonaPrompt('__sample__')">
+						{{ expandedPromptId === '__sample__' ? '收起示例' : '查看完整示例' }}
+					</text>
+				</view>
+				<view v-if="expandedPromptId === '__sample__'" class="persona-prompt">
+					<text>{{ samplePrompt }}</text>
+					<view class="prompt-fill" @tap.stop="fillSample">一键填入到下方编辑框</view>
+				</view>
 			</view>
 			<textarea
 				v-if="s.personalityId === 'custom'"
@@ -179,7 +210,7 @@
 
 <script>
 	import { getConversationSettings, saveSettings, clearConversation } from '../../utils/chat.js'
-	import { PERSONALITIES, PROVIDERS } from '../../utils/prompts.js'
+	import { PERSONALITIES, PROVIDERS, CUSTOM_PROMPT_SAMPLE } from '../../utils/prompts.js'
 	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage, getApiProfiles, saveApiProfile, deleteApiProfile } from '../../utils/storage.js'
 	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
 
@@ -194,6 +225,8 @@
 				bg: getBackgroundImage(),
 				logs: getLogs(),
 				expandedId: '',
+				expandedPromptId: '',  // 当前展开查看提示词/示例的人格 id（空=全部收起）
+				samplePrompt: CUSTOM_PROMPT_SAMPLE, // 自定义人格完整设定示例
 				presets: getApiProfiles(),
 				activePreset: -1,
 				compressOptions: [
@@ -334,6 +367,15 @@
 			},
 			selectPersona(id) {
 				this.s.personalityId = id
+			},
+			// 展开/收起预设人格提示词或自定义示例（id='__sample__' 为示例）
+			togglePersonaPrompt(id) {
+				this.expandedPromptId = this.expandedPromptId === id ? '' : id
+			},
+			// 一键把完整示例填入自定义编辑框
+			fillSample() {
+				this.s.customPrompt = CUSTOM_PROMPT_SAMPLE
+				uni.showToast({ title: '已填入示例，可在此基础上修改', icon: 'none' })
 			},
 			onTemp(e) {
 				this.s.temperature = e.detail.value
@@ -620,6 +662,47 @@
 		font-size: 22rpx;
 		color: #999;
 		margin-top: 6rpx;
+	}
+
+	.persona-head {
+		display: flex;
+		align-items: flex-start;
+	}
+
+	.persona-main {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.persona-expand {
+		flex-shrink: 0;
+		margin-left: 16rpx;
+		padding-top: 4rpx;
+		font-size: 22rpx;
+		color: #5b7cfa;
+	}
+
+	.persona-prompt {
+		margin-top: 16rpx;
+		padding: 20rpx;
+		background: #fff;
+		border-radius: 12rpx;
+		border: 1rpx solid #e5e6eb;
+		font-size: 24rpx;
+		color: #666;
+		line-height: 1.7;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.prompt-fill {
+		margin-top: 16rpx;
+		display: inline-block;
+		font-size: 24rpx;
+		color: #5b7cfa;
+		border: 1rpx solid #5b7cfa;
+		border-radius: 24rpx;
+		padding: 8rpx 24rpx;
 	}
 
 	.custom-box {

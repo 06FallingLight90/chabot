@@ -3,7 +3,10 @@
 		{
 			"path": "pages/chat/chat",
 			"style": {
-				"navigationBarTitleText": "AI 伙伴"
+				"navigationBarTitleText": "AI 伙伴",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
 			}
 		},
 		{
