@@ -13,6 +13,12 @@
 			}
 		},
 		{
+			"path": "pages/emoji/emoji",
+			"style": {
+				"navigationBarTitleText": "表情管理"
+			}
+		},
+		{
 			"path": "pages/settings/settings",
 			"style": {
 				"navigationBarTitleText": "设置"

@@ -22,6 +22,14 @@ importance: 5=核心身份 4=重要 3=中长期 2=临时 1=闲聊
 
 export const SCENE_GUIDE = `[情景] 回复时在 Memory 行之前输出 Scene 行：Scene: 中性记录此刻情境，谁在哪做什么，≤30字。格式严格 Scene: 开头后接一句陈述，不要加引号或多余符号。严禁文学化描述。若没有情景变化（比如用户在相同地点做相同事件），不输出 Scene 行。`
 
+/** 表情包引导段：随可用清单一起注入 system（无表情时不注入） */
+export const EMOJI_GUIDE = `[表情包]
+你有自己的一套自定义表情包，回复聊天时可以在文本中穿插使用：
+- 格式：用 $ 包裹表情名，如：好的呀 $小狗高兴$
+- 表情名必须严格取自下方清单，严禁编造清单外的名字
+- 每次回复最多使用 2 个表情包，与文本分条显示，放在最贴合语气的文本前后
+可用表情包清单：`
+
 /** 通用对话规则：与人格提示词一起注入 system */
 const CHAT_GUIDE = `[对话规则]
 - 贴合人格，中文口语短句，默认 1-3 句
@@ -35,8 +43,9 @@ const CHAT_GUIDE = `[对话规则]
  * @param {string} memoryText 检索到的记忆上下文（可为空）
  * @param {string[]} sceneHistory 情景历史数组（最新在末尾，可为空）
  * @param {string} nowText 当前时间描述（可为空）
+ * @param {string[]} [emojiList] 表情名清单（可为空，为空时不注入表情包规则）
  */
-export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText) {
+export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText, emojiList) {
 	let s = `${personalityPrompt.trim()}\n\n${CHAT_GUIDE}\n\n${MEMORY_GUIDE}\n\n${SCENE_GUIDE}`
 	const state = []
 	if (nowText) state.push(nowText)
@@ -50,6 +59,9 @@ export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, n
 	}
 	if (state.length) s += `\n\n[当前状态]\n${state.join('\n')}`
 	if (memoryText) s += `\n\n[你对用户的记忆]\n${memoryText}`
+	if (Array.isArray(emojiList) && emojiList.length) {
+		s += `\n\n${EMOJI_GUIDE}\n${emojiList.map((n) => `- ${n}`).join('\n')}`
+	}
 	return s
 }
 

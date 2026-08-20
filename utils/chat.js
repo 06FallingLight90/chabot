@@ -32,6 +32,7 @@ import { MemoryStore, parseMemoryLine } from './memory.js'
 import { buildSystemPrompt, buildNowText, getPersonalityById, getPersonaName } from './prompts.js'
 import { chatCompletion } from './llm.js'
 import { addLog } from './log.js'
+import { getEmojiMap, emojiListForPrompt, extractEmojiNames } from './emojis.js'
 
 export const memoryStore = new MemoryStore()
 
@@ -170,33 +171,56 @@ export function getHistoryForUI() {
 /** 清空对话 */
 export function clearConversation() {
 	clearChat()
+	syncLastRequest()
 	addLog('info', '清空当前对话')
 }
 
+let _lastRequest = '' // 最近一次请求内容缓存，"重新生成"直接重发（不重复落库用户消息）
+
+/** 同步请求缓存到当前会话的最后一条用户消息（切会话/清空后调用，避免跨会话重发错内容） */
+function syncLastRequest() {
+	const rows = getChatRows()
+	for (let i = rows.length - 1; i >= 0; i--) {
+		if (rows[i].role === 'user') {
+			_lastRequest = rows[i].content
+			return
+		}
+	}
+	_lastRequest = ''
+}
+
 /**
- * 移除最后一条助手消息（用户点"重新生成"时调用），同时撤回该响应记录的情景与记忆。
- * 返回被移除的上一条用户消息内容，供重发使用；若无可重发内容则返回空串。
+ * 用户点"重新生成"时调用：移除待重发请求对应的最后一条助手回复（撤回其情景与记忆）。
+ * 返回待重发内容——优先取最近一次请求缓存，无缓存（如重启后）回退到当前会话最后一条用户消息；
+ * 若无可重发内容则返回空串。用户消息保留在存储中，重发（persistUser:false）不再重复落库。
  */
 export function popLastAssistant() {
 	const rows = getChatRows()
-	// 从末尾往前找最后一个 assistant 消息，同时记录它前面的 user 消息
-	let lastUser = ''
-	let cutIdx = -1
+	// 待重发内容：最近一次请求缓存优先；无缓存（如重启后）回退到最后一条用户消息
+	let req = _lastRequest
+	if (!req) {
+		for (let i = rows.length - 1; i >= 0; i--) {
+			if (rows[i].role === 'user') {
+				req = rows[i].content
+				break
+			}
+		}
+	}
+	if (!req) return ''
+	// 定位该请求对应的最后一条用户消息（从后往前匹配，取最近一次），
+	// 若紧随其后有 assistant 回复则移除并撤回其情景/记忆；发送失败时无回复可移，仅重发
 	for (let i = rows.length - 1; i >= 0; i--) {
-		if (rows[i].role === 'assistant' && cutIdx < 0) {
-			cutIdx = i
-		} else if (rows[i].role === 'user' && cutIdx >= 0) {
-			lastUser = rows[i].content
+		if (rows[i].role === 'user' && rows[i].content === req) {
+			const reply = rows[i + 1]
+			if (reply && reply.role === 'assistant') {
+				rollbackAssistantEffects(reply)
+				truncateChat(i + 1)
+			}
 			break
 		}
 	}
-	if (cutIdx < 0) return ''
-	// 撤回被重新生成响应的情景与记忆（rollback 信息随 assistant 行落库，旧数据无此字段则跳过）
-	rollbackAssistantEffects(rows[cutIdx])
-	// 移除 cutIdx 及之后所有行（即最新的 assistant + 可能之前的冗余）
-	truncateChat(cutIdx)
-	addLog('info', '重新生成', `截断到第 ${cutIdx} 条消息，重发：${lastUser.slice(0, 20)}`)
-	return lastUser
+	addLog('info', '重新生成', `重发最近一次请求：${req.slice(0, 20)}`)
+	return req
 }
 
 /** 撤回一条响应记录附带的情景与记忆变更（重新生成前调用） */
@@ -240,6 +264,7 @@ export function startNewConversation() {
 		addLog('info', '重置空对话')
 	}
 	setConversationSettingsRaw(normalizeSettings(currentSettings))
+	syncLastRequest()
 }
 
 /** 切换到指定会话（记忆与人格随会话切换，重置召回状态） */
@@ -247,6 +272,7 @@ export function openConversation(id) {
 	const ok = switchConversation(id)
 	if (ok) {
 		memoryStore.resetState()
+		syncLastRequest()
 		addLog('info', '切换会话', id)
 	}
 	return ok
@@ -257,6 +283,7 @@ export function removeConversation(id) {
 	const ok = deleteConversation(id)
 	if (ok) {
 		memoryStore.resetState()
+		syncLastRequest()
 		addLog('info', '删除会话', id)
 	}
 	return ok
@@ -266,6 +293,7 @@ export function removeConversation(id) {
 export function copyConversationToNew() {
 	duplicateConversationToNew()
 	memoryStore.resetState()
+	syncLastRequest()
 	addLog('info', '复制对话到新会话')
 }
 
@@ -273,6 +301,7 @@ export function copyConversationToNew() {
 export function copyMemoriesToNew() {
 	duplicateMemoriesToNew()
 	memoryStore.resetState()
+	syncLastRequest()
 	addLog('info', '复制记忆到新会话')
 }
 
@@ -364,14 +393,20 @@ export async function maybeCompress() {
 /**
  * 发送一条用户消息
  * @param {string} userText
+ * @param {{persistUser?: boolean}} [opts] persistUser=false 表示"重新生成"重发：
+ *        用户消息已在首次发送时落库，本次只更新回复，避免重复记录同一句话
  * @returns {Promise<{reply:string, saved:number}>} reply 为清理掉 Memory 行后的回复
  */
-export async function sendMessage(userText) {
+export async function sendMessage(userText, opts = {}) {
 	// 设置全部取当前会话（每个对话独享一份设置：API 配置 / 人格 / 时间模式等）
+	const persistUser = opts.persistUser !== false
 	const s = getConversationSettings()
 	if (!s.apiKey) throw new Error('请先在「设置」中填写 API Key')
 	if (!s.baseUrl) throw new Error('请先在「设置」中填写接口地址')
 	if (!s.model) throw new Error('请先在「设置」中填写模型名称')
+
+	// 缓存最近一次请求：聊天页"重新生成"直接重发该内容（重发时 persistUser:false，不重复落库用户消息）
+	_lastRequest = userText
 
 	// 记录发送前的情景历史长度：若本响应更新了情景，重新生成时据此撤回
 	const sceneLenBefore = getSceneHistory().length
@@ -380,14 +415,15 @@ export async function sendMessage(userText) {
 	const memoryText = memoryStore.retrieveContext(userText)
 	addLog('info', '发送消息', userText.slice(0, 40))
 
-	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆）
+	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆 + 表情包清单）
 	const personalityPrompt =
 		s.personalityId === 'custom' ? s.customPrompt : getPersonalityById(s.personalityId).prompt
 	const system = buildSystemPrompt(
 		personalityPrompt || '你是友好的聊天伙伴。',
 		memoryText,
 		getSceneHistory(),
-		s.timeMode === 'virtual' ? '' : buildNowText()
+		s.timeMode === 'virtual' ? '' : buildNowText(),
+		emojiListForPrompt() // 表情清单为空时 buildSystemPrompt 不注入表情包规则
 	)
 
 	// 3-5. 请求 → 格式校验 → 解析：回复格式不合格时自动重试（上限 maxRequestAttempts）。
@@ -395,46 +431,54 @@ export async function sendMessage(userText) {
 	const maxAttempts = Math.max(1, Math.min(20, parseInt(s.maxRequestAttempts, 10) || 5))
 	let result = null
 	let lastReason = ''
-	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		// 组装 messages：system + 未压缩历史 + 当前用户消息
-		// 压缩概要并入首条 system 末尾，避免出现第二条 system 消息——Ollama 等模板要求
-		// system 必须在 messages 最前且只能一条，多条 system 会抛 "System message must be at the beginning"
-		const { summary, compressedUntil } = getConversationCompression()
-		const messages = [
-			{ role: 'system', content: summary ? `${system}\n\n此前对话概要：${summary}` : system }
-		]
-		for (const h of getChatRows().slice(compressedUntil).slice(-HISTORY_ENTRIES)) {
-			messages.push({ role: h.role, content: h.content })
-		}
-		messages.push({ role: 'user', content: userText })
+	// 任一尝试失败（网络错误 / 格式校验达上限）都只记录用户请求、不落库错误回复，
+	// 聊天页"重新生成"基于最近一次请求缓存直接重发
+	try {
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			// 组装 messages：system + 未压缩历史 + 当前用户消息
+			// 压缩概要并入首条 system 末尾，避免出现第二条 system 消息——Ollama 等模板要求
+			// system 必须在 messages 最前且只能一条，多条 system 会抛 "System message must be at the beginning"
+			const { summary, compressedUntil } = getConversationCompression()
+			const messages = [
+				{ role: 'system', content: summary ? `${system}\n\n此前对话概要：${summary}` : system }
+			]
+			for (const h of getChatRows().slice(compressedUntil).slice(-HISTORY_ENTRIES)) {
+				messages.push({ role: h.role, content: h.content })
+			}
+			messages.push({ role: 'user', content: userText })
 
-		const reply = await chatCompletion({
-			baseUrl: s.baseUrl,
-			apiKey: s.apiKey,
-			model: s.model,
-			messages,
-			temperature: s.temperature,
-			reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
-		})
+			const reply = await chatCompletion({
+				baseUrl: s.baseUrl,
+				apiKey: s.apiKey,
+				model: s.model,
+				messages,
+				temperature: s.temperature,
+				reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
+			})
 
-		const parsed = parseAndValidateReply(reply.text)
-		if (parsed.ok) {
-			result = parsed
-			break
+			const parsed = parseAndValidateReply(reply.text)
+			if (parsed.ok) {
+				result = parsed
+				break
+			}
+			lastReason = parsed.reason
+			addLog('info', '回复格式不合格，自动重试', `第 ${attempt}/${maxAttempts} 次：${lastReason}`)
 		}
-		lastReason = parsed.reason
-		addLog('info', '回复格式不合格，自动重试', `第 ${attempt}/${maxAttempts} 次：${lastReason}`)
-	}
-	if (!result) {
-		addLog('err', '回复格式不合格（已达请求上限）', `最大请求次数 ${maxAttempts}：${lastReason}`)
-		throw new Error(`模型回复格式连续 ${maxAttempts} 次不合格（${lastReason}）`)
+		if (!result) {
+			addLog('err', '回复格式不合格（已达请求上限）', `最大请求次数 ${maxAttempts}：${lastReason}`)
+			throw new Error(`模型回复格式连续 ${maxAttempts} 次不合格（${lastReason}）`)
+		}
+	} catch (e) {
+		// 发送失败：只落库用户请求（不落库错误回复），供"重新生成"定位本次请求
+		if (persistUser) addChatRow('user', userText)
+		throw e
 	}
 
 	// 6. 落库对话：落库清理后的文本，Scene/Memory 标记不再混入历史——否则从其它页切回时
 	// 重新加载历史会把标记显示在气泡里（此前 bug），也会污染上下文压缩。
 	// assistant 行附带 rollback 信息（响应前的情景长度 + 本响应的记忆撤销清单），
 	// 重新生成时据此撤回该响应记录的情景与记忆。
-	addChatRow('user', userText)
+	if (persistUser) addChatRow('user', userText)
 	addChatRow('assistant', result.cleanReply || '…', {
 		rollback: { sceneLenBefore, memoryUndos: result.memoryUndos || [] }
 	})
@@ -461,6 +505,12 @@ export async function sendMessage(userText) {
  * @returns {{ok:boolean, reason?:string, saved?:number, newScene?:string|null, cleanReply?:string}}
  */
 function parseAndValidateReply(text) {
+	// 表情名校验：回复中的 $名$ 必须存在于表情清单，否则判定格式不合格触发重试
+	// （避免 LLM 编造清单外的名字导致聊天页渲染出"坏图"）
+	const emojiMap = getEmojiMap()
+	for (const name of extractEmojiNames(text)) {
+		if (!emojiMap[name]) return { ok: false, reason: `回复包含未知表情名：${name}` }
+	}
 	const lines = String(text || '').split('\n')
 	// 第一步：格式校验（不写入）
 	let newScene = null

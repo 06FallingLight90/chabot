@@ -536,6 +536,45 @@ try {
 assert(threw20, '达到最大请求次数后抛错')
 log20 = logsMod.getLogs()
 assert(log20.some((l) => l.type === 'err' && l.msg.includes('已达请求上限')), '日志记录达上限错误')
+// 达上限后：仅落库用户请求（不落库错误回复），"重新生成"基于请求缓存重发且不重复记录用户消息
+const rowsFail = storage.getChatRows()
+assert(rowsFail[rowsFail.length - 1].role === 'user' && rowsFail[rowsFail.length - 1].content === '格式全部失败', '达上限后仅落库用户请求，无错误回复行')
+assert(!rowsFail.some((r) => r.error), '无 error 标记行')
+assert(chat.popLastAssistant() === '格式全部失败', '达上限后可重新生成（返回最近一次请求）')
+// 模拟聊天页"重新生成"路径（persistUser:false）：只新增 assistant 行，不重复记录用户消息
+const rowsBefore20 = storage.getChatRows().length
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '重新生成后的正常回复' } }] } })
+}
+await chat.sendMessage('格式全部失败', { persistUser: false })
+const rowsAfter20 = storage.getChatRows()
+assert(rowsAfter20.length === rowsBefore20 + 1, '重新生成只新增 assistant 行，不重复记录用户消息')
+assert(rowsAfter20[rowsAfter20.length - 1].role === 'assistant' && rowsAfter20[rowsAfter20.length - 1].content === '重新生成后的正常回复', '重新生成后正常落库新回复')
+assert(rowsAfter20[rowsAfter20.length - 2].role === 'user' && rowsAfter20[rowsAfter20.length - 2].content === '格式全部失败', '用户消息仅保留一条')
+// 发送失败后重新生成：只处理本次失败请求，不误删此前正常的回复
+const failRowsBefore20 = storage.getChatRows().length
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: 'Scene: 只有场景' } }] } })
+}
+try {
+	await chat.sendMessage('失败但前面有正常回复')
+} catch (e) {
+	/* 预期抛错 */
+}
+assert(storage.getChatRows().length === failRowsBefore20 + 1, '失败后仅新增用户消息')
+assert(chat.popLastAssistant() === '失败但前面有正常回复', '失败后可重新生成该请求')
+assert(storage.getChatRows().length === failRowsBefore20 + 1, '此前正常回复未被误删')
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '成功回复' } }] } })
+}
+await chat.sendMessage('失败但前面有正常回复', { persistUser: false })
+const rowsFail2 = storage.getChatRows()
+assert(rowsFail2[rowsFail2.length - 1].role === 'assistant' && rowsFail2[rowsFail2.length - 1].content === '成功回复', '重新生成成功落库新回复')
+assert(rowsFail2[rowsFail2.length - 2].content === '失败但前面有正常回复', '用户消息仍只有一条')
+assert(rowsFail2.some((r) => r.content === '重新生成后的正常回复'), '此前正常回复仍保留')
 
 console.log('\n[21] 重新生成撤回响应记录的情景与记忆')
 chat.startNewConversation()

@@ -34,8 +34,9 @@
 						<view class="empty-name">{{ personaName }}</view>
 						<view class="empty-tip">打个招呼，开始聊天吧～</view>
 					</view>
-					<view v-for="(m, i) in messages" :key="i" :id="'msg-' + i" class="msg-row" :class="m.role">
-						<view class="bubble">{{ m.content }}</view>
+					<view v-for="(r, i) in displayRows" :key="i" :id="'msg-' + i" class="msg-row" :class="r.role">
+						<view v-if="r.type === 'text'" class="bubble">{{ r.text }}</view>
+						<image v-else class="bubble-emoji" :src="r.src" mode="aspectFit" />
 					</view>
 					<view v-if="loading" class="msg-row assistant">
 						<view class="bubble typing">正在思考…</view>
@@ -76,7 +77,42 @@
 				placeholder="输入消息…"
 				@confirm="send"
 			/>
+			<text class="emoji-btn" :class="{ on: showEmojiPanel }" @tap="toggleEmojiPanel">表情</text>
 			<button class="send-btn" :disabled="loading || !input.trim()" @tap="send">发送</button>
+		</view>
+
+		<!-- 表情栏：展示全部表情，点击插入 $表情名$ 占位 -->
+		<view v-if="showEmojiPanel" class="emoji-panel">
+			<scroll-view scroll-y class="emoji-list">
+				<view class="emoji-grid">
+					<view v-if="!emojis.length" class="emoji-empty">还没有表情包，点下方「上传表情」添加</view>
+					<view v-for="e in emojis" :key="e.id" class="emoji-item" @tap="insertEmoji(e)">
+						<image class="emoji-thumb" :src="e.src" mode="aspectFit" />
+						<text class="emoji-name">{{ e.name }}</text>
+					</view>
+				</view>
+			</scroll-view>
+			<view class="emoji-tools">
+				<text class="emoji-tool" @tap="startUploadEmoji">上传表情</text>
+				<text class="emoji-tool" @tap="openEmojiManage">管理</text>
+			</view>
+		</view>
+
+		<!-- 上传表情：名称输入弹窗 -->
+		<view v-if="showEmojiName" class="mask" @tap="closeEmojiName">
+			<view class="edit-panel" @tap.stop>
+				<view class="edit-title">上传表情</view>
+				<input
+					class="emoji-name-input"
+					v-model="emojiNameDraft"
+					maxlength="20"
+					placeholder="给表情起个名字，如：小狗高兴"
+				/>
+				<view class="edit-btns">
+					<button class="edit-btn cancel" @tap="closeEmojiName">取消</button>
+					<button class="edit-btn ok" @tap="confirmEmojiName">保存</button>
+				</view>
+			</view>
 		</view>
 
 		<!-- 情景编辑弹窗 -->
@@ -205,6 +241,7 @@
 	import { formatMemoryTime } from '../../utils/memory.js'
 	import { PERSONALITIES } from '../../utils/prompts.js'
 	import { exportChatToFile } from '../../utils/export.js'
+	import { getEmojis, addEmoji, splitEmojiText } from '../../utils/emojis.js'
 
 	const THUMB_H = 48 // 滑块拇指高度（px），与样式一致
 
@@ -234,7 +271,12 @@
 				personalities: PERSONALITIES,
 				showPersona: false,      // 会话人格弹窗
 				personaDraftId: '',      // 弹窗中选择的人格 id
-				personaDraftPrompt: ''   // 自定义人格提示词草稿
+				personaDraftPrompt: '',  // 自定义人格提示词草稿
+				emojis: [],              // 全局表情列表（表情栏展示）
+				showEmojiPanel: false,   // 表情栏展开状态
+				showEmojiName: false,    // 上传表情名称输入弹窗
+				emojiNameDraft: '',      // 表情名输入草稿
+				emojiPendingSrc: ''      // 待保存的图片临时路径
 			}
 		},
 		computed: {
@@ -256,6 +298,21 @@
 				if (!this.sliderRect) return '0px'
 				const h = Math.max(0, this.sliderRect.height - THUMB_H)
 				return (this.dragRatio * h).toFixed(1) + 'px'
+			},
+			emojiMap() {
+				const map = {}
+				for (const e of this.emojis) map[e.name] = e.src
+				return map
+			},
+			// 把每条消息按 $表情名$ 拆分为段行（文本段 → 气泡，表情段 → 图片），分条展示
+			displayRows() {
+				const rows = []
+				for (const m of this.messages) {
+					for (const seg of splitEmojiText(m.content, this.emojiMap)) {
+						rows.push({ role: m.role, ...seg })
+					}
+				}
+				return rows
 			}
 		},
 		onShow() {
@@ -265,6 +322,7 @@
 			this.refreshHeader()
 			this.bg = getBackgroundImage()
 			this.scene = getScene()
+			this.refreshEmojis()
 			this.showJumpBottom = false
 			this._lastScrollTop = 0
 			this._touchY = null
@@ -279,10 +337,73 @@
 				this.personaName = s.personaName
 				this.model = s.model
 			},
+			// ---- 表情包 ----
+			refreshEmojis() {
+				this.emojis = getEmojis()
+			},
+			toggleEmojiPanel() {
+				if (this.showEmojiPanel) {
+					this.showEmojiPanel = false
+					return
+				}
+				this.refreshEmojis()
+				this.showEmojiPanel = true
+				this.hideKeyboard()
+			},
+			hideKeyboard() {
+				// #ifdef H5
+				if (document && document.activeElement && document.activeElement.blur) document.activeElement.blur()
+				// #endif
+				// #ifdef APP-PLUS || MP-WEIXIN
+				uni.hideKeyboard()
+				// #endif
+			},
+			insertEmoji(e) {
+				this.input += '$' + e.name + '$'
+			},
+			startUploadEmoji() {
+				uni.chooseImage({
+					count: 1,
+					sizeType: ['compressed'],
+					success: (res) => {
+						if (res.tempFilePaths && res.tempFilePaths[0]) {
+							this.emojiPendingSrc = res.tempFilePaths[0]
+							this.emojiNameDraft = ''
+							this.showEmojiName = true
+						}
+					}
+				})
+			},
+			closeEmojiName() {
+				this.showEmojiName = false
+			},
+			confirmEmojiName() {
+				const name = this.emojiNameDraft.trim()
+				if (!name) {
+					uni.showToast({ title: '请填写表情名', icon: 'none' })
+					return
+				}
+				uni.showLoading({ title: '保存中…' })
+				addEmoji(this.emojiPendingSrc, name)
+					.then(() => {
+						uni.hideLoading()
+						this.closeEmojiName()
+						this.refreshEmojis()
+						uni.showToast({ title: '已添加表情', icon: 'success' })
+					})
+					.catch((e) => {
+						uni.hideLoading()
+						uni.showToast({ title: e && e.message ? e.message : '保存失败', icon: 'none' })
+					})
+			},
+			openEmojiManage() {
+				uni.navigateTo({ url: '/pages/emoji/emoji' })
+			},
 			send() {
 				const text = this.input.trim()
 				if (!text || this.loading) return
 				this.input = ''
+				this.showEmojiPanel = false
 				this.messages.push({ role: 'user', content: text })
 				this.loading = true
 				this.scrollBottom()
@@ -347,7 +468,8 @@
 				this.scene = getScene() // popLastAssistant 已撤回该响应记录的情景，同步展示
 				this.input = ''
 				this.loading = true
-				sendMessage(lastUser)
+				// 重发最近一次请求：用户消息已落库，persistUser:false 避免重复记录同一句话
+				sendMessage(lastUser, { persistUser: false })
 					.then(({ reply, saved }) => {
 						this.messages.push({ role: 'assistant', content: reply })
 						this.scene = getScene()
@@ -530,12 +652,12 @@
 				// dragRatio 保留在当前位置，不再重置
 			},
 			updateDrag(touch) {
-				if (!this.sliderRect || !this.messages.length) return
+				if (!this.sliderRect || !this.displayRows.length) return
 				const ratio = Math.min(1, Math.max(0, (touch.clientY - this.sliderRect.top) / this.sliderRect.height))
 				this.dragRatio = ratio
-				const index = Math.round(ratio * (this.messages.length - 1))
+				const index = Math.round(ratio * (this.displayRows.length - 1))
 				this.scrollInto = 'msg-' + index
-				this.dragTip = index + 1 + ' / ' + this.messages.length
+				this.dragTip = index + 1 + ' / ' + this.displayRows.length
 			}
 		}
 	}
@@ -698,6 +820,13 @@
 		color: #aaa;
 	}
 
+	/* 表情消息：图片独立成行展示 */
+	.bubble-emoji {
+		width: 200rpx;
+		height: 200rpx;
+		border-radius: 12rpx;
+	}
+
 	.input-bar {
 		display: flex;
 		align-items: center;
@@ -716,6 +845,18 @@
 		font-size: 28rpx;
 	}
 
+	.emoji-btn {
+		margin-left: 16rpx;
+		font-size: 26rpx;
+		color: #666;
+		padding: 8rpx 16rpx;
+	}
+
+	.emoji-btn.on {
+		color: #5b7cfa;
+		font-weight: 600;
+	}
+
 	.send-btn {
 		margin-left: 20rpx;
 		height: 76rpx;
@@ -730,6 +871,82 @@
 	.send-btn[disabled] {
 		background: #c8d0fa;
 		color: #fff;
+	}
+
+	/* ---- 表情栏 ---- */
+	.emoji-panel {
+		background: #ffffff;
+		border-top: 1rpx solid #eee;
+	}
+
+	.emoji-list {
+		max-height: 380rpx;
+	}
+
+	.emoji-grid {
+		display: flex;
+		flex-wrap: wrap;
+		padding: 16rpx;
+		box-sizing: border-box;
+	}
+
+	.emoji-empty {
+		width: 100%;
+		padding: 48rpx 0;
+		text-align: center;
+		font-size: 24rpx;
+		color: #bbb;
+	}
+
+	.emoji-item {
+		width: 25%;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		padding: 12rpx 0;
+		box-sizing: border-box;
+	}
+
+	.emoji-thumb {
+		width: 100rpx;
+		height: 100rpx;
+	}
+
+	.emoji-name {
+		margin-top: 8rpx;
+		font-size: 20rpx;
+		color: #999;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.emoji-tools {
+		display: flex;
+		border-top: 1rpx solid #eee;
+	}
+
+	.emoji-tool {
+		flex: 1;
+		text-align: center;
+		padding: 20rpx 0;
+		font-size: 26rpx;
+		color: #5b7cfa;
+	}
+
+	.emoji-tool + .emoji-tool {
+		border-left: 1rpx solid #eee;
+	}
+
+	.emoji-name-input {
+		width: 100%;
+		height: 76rpx;
+		background: #f2f3f5;
+		border-radius: 12rpx;
+		padding: 0 24rpx;
+		box-sizing: border-box;
+		font-size: 28rpx;
 	}
 
 	.slider-wrap {
