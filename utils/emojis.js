@@ -194,6 +194,24 @@ export function deleteEmoji(id) {
 	return true
 }
 
+/**
+ * 按新顺序重排表情列表（拖拽排序用），列表外的 id 自动忽略。
+ * @param {string[]} orderedIds 新顺序的表情 id 数组
+ */
+export function reorderEmojis(orderedIds) {
+	_ensureLoaded()
+	const byId = new Map(_emojis.map((e) => [e.id, e]))
+	const next = (Array.isArray(orderedIds) ? orderedIds : [])
+		.map((id) => byId.get(id))
+		.filter(Boolean)
+	// 补上未出现在新顺序里的表情（防御：保证列表不丢项）
+	for (const e of _emojis) {
+		if (!next.includes(e)) next.push(e)
+	}
+	_emojis = next
+	_persist()
+}
+
 /** 新建正则：匹配 $表情名$ 占位（名 1~20 字，不含 $ 与换行） */
 function _emojiTokenRe() {
 	return /\$([^$\n]{1,20})\$/g

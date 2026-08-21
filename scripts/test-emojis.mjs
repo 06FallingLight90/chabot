@@ -30,6 +30,7 @@ const {
 	addEmojiData,
 	renameEmoji,
 	deleteEmoji,
+	reorderEmojis,
 	splitEmojiText,
 	extractEmojiNames
 } = await import('../utils/emojis.js')
@@ -104,7 +105,18 @@ assert(extractEmojiNames('$瞎编的$ $大狗开心$').join(',') === '瞎编的,
 assert(extractEmojiNames('没有占位').length === 0, '无占位返回空')
 assert(extractEmojiNames('$' + '超'.repeat(21) + '$').length === 0, '超过 20 字的 $..$ 不视为占位')
 
-console.log('\n[7] 删除')
+console.log('\n[7] 拖拽重排')
+reorderEmojis([b.id, a.id])
+let order = getEmojis().map((e) => e.id)
+assert(order[0] === b.id && order[1] === a.id, '重排后顺序为 b,a')
+reorderEmojis(['not-exist-id'])
+order = getEmojis().map((e) => e.id)
+assert(order.length === 2 && order[0] === b.id && order[1] === a.id, '未知 id 被忽略且不丢项')
+reorderEmojis([a.id])
+order = getEmojis().map((e) => e.id)
+assert(order.length === 2 && order[0] === a.id && order[1] === b.id, '仅给出部分 id 时其余自动补位')
+
+console.log('\n[8] 删除')
 assert(deleteEmoji(a.id) === true, '删除成功')
 assert(getEmojis().length === 1, '删除后剩 1 个')
 assert(deleteEmoji('not-exist') === false, '删除不存在返回 false')

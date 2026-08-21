@@ -20,10 +20,10 @@
 			</view>
 		</scroll-view>
 
-		<!-- 名称输入弹窗（上传 / 改名共用） -->
+		<!-- 名称输入弹窗（上传 / 改名共用，上传支持批量逐张命名） -->
 		<view v-if="showName" class="mask" @tap="closeName">
 			<view class="edit-panel" @tap.stop>
-				<view class="edit-title">{{ mode === 'upload' ? '上传表情' : '修改表情名' }}</view>
+				<view class="edit-title">{{ mode === 'upload' ? '上传表情（' + (uploadIndex + 1) + '/' + uploadQueue.length + '）' : '修改表情名' }}</view>
 				<view class="preview-wrap">
 					<image class="preview-img" :src="previewSrc" mode="aspectFit" />
 				</view>
@@ -54,7 +54,8 @@
 				mode: 'upload',      // upload 上传 / rename 改名
 				nameDraft: '',       // 表情名输入草稿
 				previewSrc: '',      // 弹窗中预览的图片
-				pendingTempPath: '', // 上传模式：选图后的临时路径
+				uploadQueue: [],     // 批量选择待命名的图片临时路径数组
+				uploadIndex: 0,      // 当前命名到第几张（0 起）
 				editingId: null      // 改名模式：表情 id
 			}
 		},
@@ -70,17 +71,18 @@
 			},
 			startUpload() {
 				uni.chooseImage({
-					count: 1,
+					count: 9,
 					sizeType: ['compressed'],
 					success: (res) => {
-						if (res.tempFilePaths && res.tempFilePaths[0]) {
-							this.mode = 'upload'
-							this.editingId = null
-							this.pendingTempPath = res.tempFilePaths[0]
-							this.previewSrc = res.tempFilePaths[0]
-							this.nameDraft = ''
-							this.showName = true
-						}
+						const paths = (res.tempFilePaths || []).filter(Boolean)
+						if (!paths.length) return
+						this.mode = 'upload'
+						this.editingId = null
+						this.uploadQueue = paths
+						this.uploadIndex = 0
+						this.previewSrc = paths[0]
+						this.nameDraft = ''
+						this.showName = true
 					}
 				})
 			},
@@ -93,6 +95,8 @@
 			},
 			closeName() {
 				this.showName = false
+				this.uploadQueue = []
+				this.uploadIndex = 0
 			},
 			saveName() {
 				const name = this.nameDraft.trim()
@@ -103,12 +107,21 @@
 				try {
 					if (this.mode === 'upload') {
 						uni.showLoading({ title: '保存中…' })
-						addEmoji(this.pendingTempPath, name)
+						addEmoji(this.uploadQueue[this.uploadIndex], name)
 							.then(() => {
 								uni.hideLoading()
+								this.uploadIndex++
+								// 还有待命名的图片：继续下一张
+								if (this.uploadIndex < this.uploadQueue.length) {
+									this.previewSrc = this.uploadQueue[this.uploadIndex]
+									this.nameDraft = ''
+									return
+								}
+								// 全部命名完成
+								const total = this.uploadQueue.length
 								this.closeName()
 								this.refresh()
-								uni.showToast({ title: '已添加表情', icon: 'success' })
+								uni.showToast({ title: '已添加 ' + total + ' 个表情', icon: 'success' })
 							})
 							.catch((e) => {
 								uni.hideLoading()
