@@ -4,6 +4,6 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"test": "node scripts/test-memory.mjs"
+		"test": "node scripts/test-memory.mjs && node scripts/test-emojis.mjs"
 	}
 }

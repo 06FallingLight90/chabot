@@ -1,257 +1,48 @@
 <template>
 	<view class="page">
-		<view class="header">
-			<view class="header-left">
-				<text class="persona" @tap="openPersona">{{ personaName }}</text>
-				<text class="model">{{ model }}</text>
-			</view>
-			<view class="header-right">
-				<text class="h-btn" @tap="openHistory">历史</text>
-				<text class="h-btn primary" @tap="newChat">新对话</text>
-				<text class="h-btn" @tap="confirmClear">清空</text>
-			</view>
-		</view>
-
-		<view class="scene-bar" v-if="scene" @tap="openSceneEdit">
-			<view class="scene-dot"></view>
-			<text class="scene-text">{{ scene }}</text>
-		</view>
+		<chat-header
+			:persona-name="personaName"
+			:model="model"
+			:scene="scene"
+			@open-persona="openPersona"
+			@open-history="openHistory"
+			@new-chat="newChat"
+			@clear="confirmClear"
+			@open-scene-edit="openSceneEdit"
+		/>
 
 		<!-- 点击消息区任意位置收起表情栏（QQ 式交互） -->
 		<view class="msg-wrap" @tap="closeEmojiPanel">
-			<scroll-view
-				scroll-y
-				class="msg-list"
-				:style="bgStyle"
-				:scroll-into-view="scrollInto"
-				scroll-with-animation
-				@scroll="onMsgScroll"
-				@scrolltolower="onMsgScrollToLower"
-				@touchstart="onMsgTouchStart"
-				@touchmove="onMsgTouchMove"
-			>
-				<view class="msg-inner">
-					<view v-if="!messages.length" class="empty">
-						<view class="empty-name">{{ personaName }}</view>
-						<view class="empty-tip">打个招呼，开始聊天吧～</view>
-					</view>
-					<view v-for="(r, i) in displayRows" :key="i" :id="'msg-' + i" class="msg-row" :class="r.role">
-						<view v-if="r.type === 'text'" class="bubble">{{ r.text }}</view>
-						<image v-else class="bubble-emoji" :src="r.src" mode="aspectFit" />
-					</view>
-					<view v-if="loading" class="msg-row assistant">
-						<view class="bubble typing">正在思考…</view>
-					</view>
-					<view v-if="!loading && messages.length && lastIsAssistant" class="msg-foot">
-						<text class="regenerate" @tap="doRegenerate">重新生成</text>
-					</view>
-					<view id="anchor"></view>
-				</view>
-			</scroll-view>
-
-			<!-- 侧边滑块：快速翻阅长聊天记录 -->
-			<view class="slider-wrap" v-if="messages.length > 15">
-				<view
-					class="slider-bar"
-					@touchstart="onSliderStart"
-					@touchmove.stop.prevent="onSliderMove"
-					@touchend="onSliderEnd"
-					@touchcancel="onSliderEnd"
-				>
-					<view class="slider-thumb" :style="{ top: thumbTop }"></view>
-				</view>
-				<view v-if="dragTip" class="slider-tip">{{ dragTip }}</view>
-			</view>
-
-			<!-- 一键回到底部：仅当用户上翻离开底部时出现 -->
-			<view v-if="showJumpBottom" class="jump-bottom" @tap="jumpToBottom">
-				<text class="jump-arrow">↓</text>
-			</view>
-		</view>
-
-		<view class="input-bar">
-			<input
-				class="input"
-				v-model="input"
-				confirm-type="send"
-				:disabled="loading"
-				placeholder="输入消息…"
-				@confirm="send"
-				@focus="onInputFocus"
+			<chat-msg-list
+				ref="msgList"
+				:messages="messages"
+				:loading="loading"
+				:persona-name="personaName"
+				:bg="bg"
+				:emojis="emojis"
+				@regenerate="doRegenerate"
 			/>
-			<text class="emoji-btn" :class="{ on: showEmojiPanel }" @tap="toggleEmojiPanel">表情</text>
-			<button class="send-btn" :disabled="loading || !input.trim()" @tap="send">发送</button>
 		</view>
 
-		<!-- 表情栏：展示全部表情，点击插入 $表情名$ 占位；长按拖动可调整网格顺序；常驻渲染，展开/收起带平滑过渡 -->
-		<view class="emoji-panel" :class="{ 'panel-open': showEmojiPanel }">
-			<scroll-view :scroll-y="!dragId" class="emoji-list">
-				<view class="emoji-grid">
-					<view v-if="!emojis.length" class="emoji-empty">还没有表情包，点下方「上传表情」添加</view>
-					<view
-						v-for="e in emojis"
-						:key="e.id"
-						class="emoji-item"
-						:class="{ dragging: dragId === e.id }"
-						:style="dragId === e.id ? { position: 'fixed', left: dragX + 'px', top: dragY + 'px', zIndex: 99 } : ''"
-						@tap.stop="insertEmoji(e)"
-						@touchstart="onEmojiTouchStart($event, e)"
-						@touchmove="onEmojiTouchMove($event, e)"
-						@touchend="onEmojiTouchEnd"
-						@touchcancel="onEmojiTouchEnd"
-					>
-						<image class="emoji-thumb" :src="e.src" mode="aspectFit" />
-						<text class="emoji-name">{{ e.name }}</text>
-					</view>
-				</view>
-			</scroll-view>
-			<view class="emoji-tools">
-				<text class="emoji-tool" @tap="startUploadEmoji">上传表情</text>
-				<text class="emoji-tool" @tap="openEmojiManage">管理</text>
-			</view>
-		</view>
+		<chat-input-bar
+			v-model="input"
+			:loading="loading"
+			:emoji-on="showEmojiPanel"
+			@send="send"
+			@toggle-emoji="toggleEmojiPanel"
+			@focus="onInputFocus"
+		/>
 
-		<!-- 上传表情：名称输入弹窗（批量选择后逐张命名） -->
-		<view v-if="showEmojiName" class="mask" @tap="closeEmojiName">
-			<view class="edit-panel" @tap.stop>
-				<view class="edit-title">上传表情（{{ uploadIndex + 1 }}/{{ uploadQueue.length }}）</view>
-				<view class="preview-wrap">
-					<image class="preview-img" :src="emojiPendingSrc" mode="aspectFit" />
-				</view>
-				<input
-					class="emoji-name-input"
-					v-model="emojiNameDraft"
-					maxlength="20"
-					placeholder="给表情起个名字，如：小狗高兴"
-				/>
-				<view class="edit-btns">
-					<button class="edit-btn cancel" @tap="closeEmojiName">取消</button>
-					<button class="edit-btn ok" @tap="confirmEmojiName">保存</button>
-				</view>
-			</view>
-		</view>
+		<chat-emoji-panel
+			:open="showEmojiPanel"
+			:emojis="emojis"
+			@insert="onEmojiInsert"
+			@change="refreshEmojis"
+		/>
 
-		<!-- 情景编辑弹窗 -->
-		<view v-if="showSceneEdit" class="mask" @tap="closeSceneEdit">
-			<view class="edit-panel" @tap.stop>
-				<view class="edit-title">编辑当前情景</view>
-				<textarea
-					class="edit-area"
-					v-model="sceneDraft"
-					maxlength="200"
-					placeholder="用户此刻在做什么…（留空保存可清除）"
-				/>
-				<view v-if="sceneHistory.length" class="scene-history">
-					<view class="scene-history-head">历史情景（最近 {{ sceneHistory.length }} 条，点击填入编辑框）</view>
-					<scroll-view scroll-y class="scene-history-list">
-						<view
-							v-for="(h, i) in sceneHistory"
-							:key="i"
-							class="scene-history-item"
-							@tap="useSceneHistory(h)"
-						>
-							<text class="scene-history-idx">{{ i + 1 }}</text>
-							<text class="scene-history-text">{{ h }}</text>
-						</view>
-					</scroll-view>
-				</view>
-				<view class="edit-btns">
-					<button class="edit-btn cancel" @tap="closeSceneEdit">取消</button>
-					<button class="edit-btn ok" @tap="saveScene">保存</button>
-				</view>
-			</view>
-		</view>
-
-		<!-- 历史对话弹窗 -->
-		<view v-if="showHistory" class="mask" @tap="closeHistory">
-			<view class="history-panel" @tap.stop>
-				<view class="edit-title">对话历史</view>
-				<scroll-view scroll-y class="history-list">
-					<view v-if="!convList.length" class="history-empty">暂无历史对话</view>
-					<view
-						v-for="c in convList"
-						:key="c.id"
-						class="history-item"
-						:class="{ active: c.id === activeConvId }"
-						@tap="openConversation(c.id)"
-					>
-						<view class="history-main">
-							<view class="history-title">{{ c.title }}</view>
-							<view class="history-preview">{{ c.preview }}</view>
-						</view>
-						<view class="history-meta">
-							<text class="history-time">{{ c.timeText }}</text>
-							<text class="history-del" @tap.stop="confirmDeleteConv(c)">删除</text>
-						</view>
-					</view>
-				</scroll-view>
-				<view class="copy-btns">
-					<button class="edit-btn copy-btn" :disabled="loading" @tap="copyConversation">复制对话</button>
-					<button class="edit-btn copy-btn" :disabled="loading" @tap="copyMemories">复制记忆</button>
-				</view>
-				<button class="edit-btn ok compress-btn" :disabled="loading" @tap="doCompress">压缩上文为概要</button>
-				<button class="edit-btn cancel compress-btn" @tap="exportChat">导出对话为 .txt</button>
-				<button class="edit-btn cancel" @tap="closeHistory">关闭</button>
-			</view>
-		</view>
-
-		<!-- 会话人格设置弹窗 -->
-		<view v-if="showPersona" class="mask" @tap="closePersona">
-			<view class="persona-panel" @tap.stop>
-				<view class="edit-title">当前对话人格</view>
-				<view class="persona-hint">仅作用于当前对话，不影响其他对话与全局设置</view>
-				<scroll-view scroll-y class="persona-list">
-					<view
-						v-for="p in personalities"
-						:key="p.id"
-						class="persona-item"
-						:class="{ active: personaDraftId === p.id }"
-						@tap="pickPersona(p.id)"
-					>
-						<view class="persona-item-head">
-							<view class="persona-item-main">
-								<view class="persona-item-name">{{ p.name }}</view>
-								<view class="persona-item-desc">{{ p.desc }}</view>
-							</view>
-							<text class="persona-item-expand" @tap.stop="togglePersonaPrompt(p.id)">
-								{{ personaExpandedId === p.id ? '收起提示词' : '查看提示词' }}
-							</text>
-						</view>
-						<view v-if="personaExpandedId === p.id" class="persona-item-prompt">{{ p.prompt }}</view>
-					</view>
-					<view
-						class="persona-item"
-						:class="{ active: personaDraftId === 'custom' }"
-						@tap="pickPersona('custom')"
-					>
-						<view class="persona-item-head">
-							<view class="persona-item-main">
-								<view class="persona-item-name">自定义</view>
-								<view class="persona-item-desc">手写专属人格提示词</view>
-							</view>
-							<text class="persona-item-expand" @tap.stop="togglePersonaPrompt('__sample__')">
-								{{ personaExpandedId === '__sample__' ? '收起示例' : '查看完整示例' }}
-							</text>
-						</view>
-						<view v-if="personaExpandedId === '__sample__'" class="persona-item-prompt">
-							<text>{{ samplePrompt }}</text>
-							<view class="prompt-fill" @tap.stop="fillSample">填入此示例</view>
-						</view>
-					</view>
-				</scroll-view>
-				<textarea
-					v-if="personaDraftId === 'custom'"
-					class="persona-custom"
-					v-model="personaDraftPrompt"
-					maxlength="5000"
-					placeholder="在这里输入完整的人格设定提示词…"
-				/>
-				<view class="edit-btns">
-					<button class="edit-btn cancel" @tap="closePersona">取消</button>
-					<button class="edit-btn ok" @tap="savePersona">保存</button>
-				</view>
-			</view>
-		</view>
+		<chat-scene-edit :show="showSceneEdit" :scene="scene" @close="closeSceneEdit" @save="saveScene" />
+		<chat-history :show="showHistory" :loading="loading" @close="closeHistory" @changed="onHistoryChanged" />
+		<chat-persona :show="showPersona" @close="closePersona" @saved="onPersonaSaved" />
 	</view>
 </template>
 
@@ -262,25 +53,20 @@
 		clearConversation,
 		getConversationSettings,
 		popLastAssistant,
-		startNewConversation,
-		listConversations,
-		activeConversationId,
-		openConversation,
-		removeConversation,
-		copyConversationToNew,
-		copyMemoriesToNew,
-		compressContext,
-		saveConversationPersonality
+		startNewConversation
 	} from '../../utils/chat.js'
-	import { getBackgroundImage, getScene, setScene, getSceneHistory } from '../../utils/storage.js'
-	import { formatMemoryTime } from '../../utils/memory.js'
-	import { PERSONALITIES, CUSTOM_PROMPT_SAMPLE } from '../../utils/prompts.js'
-	import { exportChatToFile } from '../../utils/export.js'
-	import { getEmojis, addEmoji, splitEmojiText, reorderEmojis } from '../../utils/emojis.js'
-
-	const THUMB_H = 48 // 滑块拇指高度（px），与样式一致
+	import { getBackgroundImage, getScene, setScene } from '../../utils/storage.js'
+	import { getEmojis } from '../../utils/emojis.js'
+	import ChatHeader from './components/chat-header.vue'
+	import ChatMsgList from './components/chat-msg-list.vue'
+	import ChatInputBar from './components/chat-input-bar.vue'
+	import ChatEmojiPanel from './components/chat-emoji-panel.vue'
+	import ChatSceneEdit from './components/chat-scene-edit.vue'
+	import ChatHistory from './components/chat-history.vue'
+	import ChatPersona from './components/chat-persona.vue'
 
 	export default {
+		components: { ChatHeader, ChatMsgList, ChatInputBar, ChatEmojiPanel, ChatSceneEdit, ChatHistory, ChatPersona },
 		data() {
 			return {
 				messages: [],
@@ -291,72 +77,20 @@
 				bg: '',
 				scene: '',
 				showSceneEdit: false,
-				sceneDraft: '',
-				sceneHistory: [],
 				showHistory: false,
-				convList: [],
-				activeConvId: '',
-				showJumpBottom: false,
-				_lastScrollTop: 0, // 上翻检测基线（非模板字段）
-				_touchY: null,     // 触摸上翻检测（非模板字段）
-				scrollInto: '',
-				dragRatio: 1,     // 滑块位置比例（0=顶部 1=底部），松手后保留
-				dragTip: '',
-				sliderRect: null,
-				personalities: PERSONALITIES,
-				showPersona: false,      // 会话人格弹窗
-				personaDraftId: '',      // 弹窗中选择的人格 id
-				personaDraftPrompt: '',  // 自定义人格提示词草稿
-				personaExpandedId: '',   // 弹窗中当前展开查看提示词/示例的人格 id
-				samplePrompt: CUSTOM_PROMPT_SAMPLE, // 自定义人格完整设定示例
-				emojis: [],              // 全局表情列表（表情栏展示）
-				showEmojiPanel: false,   // 表情栏展开状态
-				showEmojiName: false,    // 上传表情名称输入弹窗
-				emojiNameDraft: '',      // 表情名输入草稿
-				emojiPendingSrc: '',     // 当前命名中图片的临时路径
-				uploadQueue: [],         // 批量选择待命名的图片临时路径数组
-				uploadIndex: 0,          // 当前命名到第几张（0 起）
-				dragId: '',              // 当前拖拽中的表情 id（空=未拖拽，表情栏可正常滚动）
-				dragX: 0,                // 拖拽项 fixed 定位（px）
-				dragY: 0,
-				kbH: 0,                  // 键盘高度（px，App/小程序经 onKeyboardHeightChange 监听）
-				pendingClosePanel: false // 表情栏打开时点了输入框，等键盘弹出后再关闭（非模板字段）
+				showPersona: false,    // 会话人格弹窗
+				showEmojiPanel: false, // 表情栏展开状态
+				emojis: [],            // 全局表情列表（表情栏与消息渲染共用）
+				pendingClosePanel: false, // 表情栏打开时点了输入框，等键盘弹出后再关闭（非模板字段）
+				kbH: 0,                // 键盘高度（px，App/小程序经 onKeyboardHeightChange 监听）
+				_unloaded: false,      // 页面卸载标记（非模板字段）
+				_kbSupported: false    // 键盘高度监听可用性（非模板字段）
 			}
 		},
 		computed: {
-			bgStyle() {
-				return this.bg
-					? {
-							backgroundImage: "url('" + this.bg + "')",
-							backgroundSize: 'cover',
-							backgroundPosition: 'center',
-							backgroundRepeat: 'no-repeat'
-					  }
-					: {}
-			},
 			lastIsAssistant() {
 				const len = this.messages.length
 				return len > 0 && this.messages[len - 1].role === 'assistant'
-			},
-			thumbTop() {
-				if (!this.sliderRect) return '0px'
-				const h = Math.max(0, this.sliderRect.height - THUMB_H)
-				return (this.dragRatio * h).toFixed(1) + 'px'
-			},
-			emojiMap() {
-				const map = {}
-				for (const e of this.emojis) map[e.name] = e.src
-				return map
-			},
-			// 把每条消息按 $表情名$ 拆分为段行（文本段 → 气泡，表情段 → 图片），分条展示
-			displayRows() {
-				const rows = []
-				for (const m of this.messages) {
-					for (const seg of splitEmojiText(m.content, this.emojiMap)) {
-						rows.push({ role: m.role, ...seg })
-					}
-				}
-				return rows
 			}
 		},
 		onShow() {
@@ -367,9 +101,7 @@
 			this.bg = getBackgroundImage()
 			this.scene = getScene()
 			this.refreshEmojis()
-			this.showJumpBottom = false
-			this._lastScrollTop = 0
-			this._touchY = null
+			if (this.$refs.msgList) this.$refs.msgList.resetScrollState()
 		},
 		onLoad() {
 			// 监听键盘高度（App / 微信小程序）：表情栏打开时唤起键盘，等键盘弹出
@@ -396,9 +128,6 @@
 			if (this._onWinResize) window.removeEventListener('resize', this._onWinResize)
 			// #endif
 		},
-		onReady() {
-			this.querySlider()
-		},
 		methods: {
 			refreshHeader() {
 				// 头部展示当前会话的人格（会话快照，非全局设置）
@@ -410,6 +139,7 @@
 			refreshEmojis() {
 				this.emojis = getEmojis()
 			},
+			// ---- 表情栏 / 键盘联动 ----
 			toggleEmojiPanel() {
 				if (this.showEmojiPanel) {
 					this.closeEmojiPanel()
@@ -462,171 +192,15 @@
 				uni.hideKeyboard()
 				// #endif
 			},
-			insertEmoji(e) {
-				// 长按进入过拖拽模式的松手会抑制一次 tap，避免误发送表情
-				if (this._suppressTap) {
-					this._suppressTap = false
-					return
-				}
-				this.input += '$' + e.name + '$'
+			// 表情面板点击插入：拼入 $表情名$ 占位
+			onEmojiInsert(name) {
+				this.input += '$' + name + '$'
 			},
-			// ---- 表情栏拖拽排序（touch 事件：短按=发送表情 / 滑动=滚动面板 / 长按 2 秒=拖动排序）----
-			onEmojiTouchStart(ev, emoji) {
-				const t = ev.touches && ev.touches[0]
-				if (!t) return
-				this._suppressTap = false
-				this._dragStartX = t.clientX
-				this._dragStartY = t.clientY
-				this._dragEmojiId = emoji.id
-				this._dragStartIndex = this.emojis.findIndex((e) => e.id === emoji.id)
-				this._dragMoved = false
-				this._itemRects = null
-				// 预取所有格子位置（异步，长按结束时大概率已就绪）
-				this.queryEmojiRects()
-				// 长按 1 秒进入拖动模式；期间手指移动（滑动表情栏）则取消
-				this._longPressTimer = setTimeout(() => {
-					this._longPressTimer = null
-					this.enterDragMode()
-				}, 1000)
+			scrollBottom() {
+				if (this.$refs.msgList) this.$refs.msgList.scrollBottom()
 			},
-			onEmojiTouchMove(ev, emoji) {
-				if (!this._dragEmojiId) return
-				const t = ev.touches && ev.touches[0]
-				if (!t) return
-				// 未进入拖拽：移动超过阈值视为滑动表情栏，取消长按计时
-				if (!this.dragId) {
-					const dx = t.clientX - this._dragStartX
-					const dy = t.clientY - this._dragStartY
-					if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
-					if (this._longPressTimer) {
-						clearTimeout(this._longPressTimer)
-						this._longPressTimer = null
-					}
-					return
-				}
-				// 拖拽中：标记发生过移动，跟随手指并实时重排
-				this._dragMoved = true
-				this.dragX = this._dragBaseX + (t.clientX - this._dragStartX)
-				this.dragY = this._dragBaseY + (t.clientY - this._dragStartY)
-				this.updateDragOrder(t)
-			},
-			onEmojiTouchEnd() {
-				if (this._longPressTimer) {
-					clearTimeout(this._longPressTimer)
-					this._longPressTimer = null
-				}
-				if (this.dragId) {
-					// 本次触摸进入过拖拽模式：抑制随后的 tap（防止松手误发送表情）
-					this._suppressTap = true
-					if (this._dragMoved && this._pendingOrder) {
-						reorderEmojis(this._pendingOrder)
-						this.refreshEmojis()
-					}
-					this.dragId = ''
-				}
-				this._dragEmojiId = ''
-				this._dragMoved = false
-				this._pendingOrder = null
-				this._itemRects = null
-			},
-			// 长按达标：进入拖动模式，被拖表情略微放大并随触屏点移动
-			enterDragMode() {
-				this.dragId = this._dragEmojiId
-				const rect = this._itemRects && this._itemRects[this._dragStartIndex]
-				if (rect) {
-					this._dragBaseX = rect.left
-					this._dragBaseY = rect.top
-				} else {
-					this._dragBaseX = this._dragStartX
-					this._dragBaseY = this._dragStartY
-				}
-				// 初始位置 = 被拖项原位置（后续 touchmove 在其上叠加位移）
-				this.dragX = this._dragBaseX
-				this.dragY = this._dragBaseY
-			},
-			// 一次性获取表情网格中所有格子的位置（视觉顺序，用于计算插入位置）
-			queryEmojiRects() {
-				uni.createSelectorQuery()
-					.in(this)
-					.selectAll('.emoji-item')
-					.boundingClientRect((rects) => {
-						if (Array.isArray(rects) && rects.length) this._itemRects = rects
-					})
-					.exec()
-			},
-			// 根据手指位置计算目标格子索引并实时重排（插入后后面的表情顺延一位）
-			updateDragOrder(t) {
-				if (!this._itemRects || !this._itemRects.length) return
-				let target = -1
-				for (let i = 0; i < this._itemRects.length; i++) {
-					const r = this._itemRects[i]
-					if (t.clientX >= r.left && t.clientX <= r.right && t.clientY >= r.top && t.clientY <= r.bottom) {
-						target = i
-						break
-					}
-				}
-				if (target < 0) return
-				const from = this.emojis.findIndex((e) => e.id === this.dragId)
-				if (from < 0 || from === target) return
-				const list = this.emojis.slice()
-				const [moved] = list.splice(from, 1)
-				list.splice(target, 0, moved)
-				this.emojis = list
-				this._pendingOrder = list.map((e) => e.id)
-			},
-			startUploadEmoji() {
-				uni.chooseImage({
-					count: 9,
-					sizeType: ['compressed'],
-					success: (res) => {
-						const paths = (res.tempFilePaths || []).filter(Boolean)
-						if (!paths.length) return
-						this.uploadQueue = paths
-						this.uploadIndex = 0
-						this.emojiPendingSrc = paths[0]
-						this.emojiNameDraft = ''
-						this.showEmojiName = true
-					}
-				})
-			},
-			closeEmojiName() {
-				this.showEmojiName = false
-				this.uploadQueue = []
-				this.uploadIndex = 0
-			},
-			confirmEmojiName() {
-				const name = this.emojiNameDraft.trim()
-				if (!name) {
-					uni.showToast({ title: '请填写表情名', icon: 'none' })
-					return
-				}
-				uni.showLoading({ title: '保存中…' })
-				addEmoji(this.uploadQueue[this.uploadIndex], name)
-					.then(() => {
-						uni.hideLoading()
-						this.uploadIndex++
-						// 还有待命名的图片：继续下一张
-						if (this.uploadIndex < this.uploadQueue.length) {
-							this.emojiPendingSrc = this.uploadQueue[this.uploadIndex]
-							this.emojiNameDraft = ''
-							return
-						}
-						// 全部命名完成
-						const total = this.uploadQueue.length
-						this.closeEmojiName()
-						this.refreshEmojis()
-						uni.showToast({ title: '已添加 ' + total + ' 个表情', icon: 'success' })
-					})
-					.catch((e) => {
-						uni.hideLoading()
-						uni.showToast({ title: e && e.message ? e.message : '保存失败', icon: 'none' })
-					})
-			},
-			openEmojiManage() {
-				uni.navigateTo({ url: '/pages/emoji/emoji' })
-			},
-			send() {
-				const text = this.input.trim()
+			// ---- 消息发送 ----
+			send(text) {
 				if (!text || this.loading) return
 				this.input = ''
 				this.showEmojiPanel = false
@@ -649,41 +223,6 @@
 						this.loading = false
 						this.scrollBottom()
 					})
-			},
-			scrollBottom() {
-				this.showJumpBottom = false
-				// scroll-into-view 仅在值变化时触发：先清空再设置，确保重复点击也能滚动
-				this.scrollInto = ''
-				this.$nextTick(() => {
-					this.scrollInto = 'anchor'
-					this.dragRatio = 1
-				})
-			},
-			// ---- 一键回到底部 ----
-			jumpToBottom() {
-				this.scrollBottom()
-			},
-			onMsgScroll(e) {
-				// App 端 scroll-view 事件不保证返回 scrollHeight/clientHeight，仅用 scrollTop 差值判断上翻
-				const st = e && e.detail && typeof e.detail.scrollTop === 'number' ? e.detail.scrollTop : null
-				if (st === null) return
-				if (!this.showJumpBottom && st < this._lastScrollTop - 3) {
-					this.showJumpBottom = true
-				}
-				this._lastScrollTop = st
-			},
-			onMsgScrollToLower() {
-				this.showJumpBottom = false
-			},
-			// 触摸兜底：手指下移（内容上移）＝正在上翻看历史；仅长对话启用避免误触
-			onMsgTouchStart(e) {
-				this._touchY = e.touches && e.touches.length ? e.touches[0].clientY : null
-			},
-			onMsgTouchMove(e) {
-				if (this.showJumpBottom || this.messages.length <= 15 || !e.touches || !e.touches.length) return
-				const y = e.touches[0].clientY
-				if (this._touchY !== null && y > this._touchY + 10) this.showJumpBottom = true
-				this._touchY = y
 			},
 			doRegenerate() {
 				if (this.loading) return
@@ -724,59 +263,7 @@
 					}
 				})
 			},
-			// ---- 会话人格设置（仅作用于当前对话） ----
-			openPersona() {
-				const s = getConversationSettings()
-				this.personaDraftId = s.personalityId
-				this.personaDraftPrompt = s.customPrompt || ''
-				this.personaExpandedId = ''
-				this.showPersona = true
-			},
-			closePersona() {
-				this.showPersona = false
-			},
-			pickPersona(id) {
-				this.personaDraftId = id
-			},
-			// 弹窗中展开/收起预设人格提示词或自定义示例
-			togglePersonaPrompt(id) {
-				this.personaExpandedId = this.personaExpandedId === id ? '' : id
-			},
-			// 一键把完整示例填入自定义提示词编辑框
-			fillSample() {
-				this.personaDraftPrompt = CUSTOM_PROMPT_SAMPLE
-				uni.showToast({ title: '已填入示例，可在此基础上修改', icon: 'none' })
-			},
-			savePersona() {
-				if (this.personaDraftId === 'custom' && !this.personaDraftPrompt.trim()) {
-					uni.showToast({ title: '请填写自定义人格提示词', icon: 'none' })
-					return
-				}
-				saveConversationPersonality(this.personaDraftId, this.personaDraftPrompt)
-				this.showPersona = false
-				this.refreshHeader()
-				uni.showToast({ title: '已切换人格', icon: 'success' })
-			},
-			// ---- 当前情景编辑 ----
-			openSceneEdit() {
-				this.sceneDraft = this.scene
-				this.sceneHistory = getSceneHistory().slice().reverse() // 最新在前
-				this.showSceneEdit = true
-			},
-			closeSceneEdit() {
-				this.showSceneEdit = false
-			},
-			useSceneHistory(h) {
-				this.sceneDraft = h
-			},
-			saveScene() {
-				const v = this.sceneDraft.trim()
-				setScene(v)
-				this.scene = v
-				this.showSceneEdit = false
-				uni.showToast({ title: v ? '已更新情景' : '已清除情景', icon: 'none' })
-			},
-			// ---- 会话历史 / 上下文压缩 ----
+			// ---- 会话历史 / 新对话（历史弹窗内操作由 chat-history 组件处理，完成后 emit changed） ----
 			newChat() {
 				if (this.loading) return
 				startNewConversation()
@@ -786,122 +273,47 @@
 				uni.showToast({ title: '已开始新对话', icon: 'none' })
 			},
 			openHistory() {
-				this.refreshConversations()
 				this.showHistory = true
 			},
 			closeHistory() {
 				this.showHistory = false
 			},
-			refreshConversations() {
-				this.convList = listConversations().map((c) => ({
-					...c,
-					timeText: formatMemoryTime(c.updated_at) || '刚刚'
-				}))
-				this.activeConvId = activeConversationId()
-			},
-			openConversation(id) {
-				if (id === this.activeConvId) {
-					this.closeHistory()
-					return
-				}
-				if (openConversation(id)) {
-					this.activeConvId = id
-					this.messages = getHistoryForUI()
-					this.scene = getScene()
-					this.refreshHeader() // 顶部栏人格名/模型名随会话切换更新
-					this.showHistory = false
-					this.scrollBottom()
-				}
-			},
-			confirmDeleteConv(c) {
-				const wasActive = c.id === this.activeConvId
-				uni.showModal({
-					title: '删除对话',
-					content: '确定删除「' + c.title + '」吗？该对话记录将无法恢复。',
-					success: (res) => {
-						if (!res.confirm) return
-						removeConversation(c.id)
-						this.refreshConversations()
-						if (wasActive) {
-							this.messages = getHistoryForUI()
-							this.scene = getScene()
-							this.refreshHeader() // 删除当前会话后切到别的会话，顶部栏同步刷新
-						}
-					}
-				})
-			},
-			copyConversation() {
-				if (this.loading) return
-				copyConversationToNew()
+			// 历史弹窗里切换/删除/复制会话后：重载当前会话展示
+			onHistoryChanged() {
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
 				this.refreshHeader()
-				this.showHistory = false
-				uni.showToast({ title: '已复制对话到新会话', icon: 'none' })
 			},
-			copyMemories() {
-				if (this.loading) return
-				copyMemoriesToNew()
-				this.messages = getHistoryForUI()
-				this.scene = getScene()
+			// ---- 当前情景编辑 ----
+			openSceneEdit() {
+				this.showSceneEdit = true
+			},
+			closeSceneEdit() {
+				this.showSceneEdit = false
+			},
+			saveScene(v) {
+				setScene(v)
+				this.scene = v
+				this.showSceneEdit = false
+				uni.showToast({ title: v ? '已更新情景' : '已清除情景', icon: 'none' })
+			},
+			// ---- 会话人格设置（仅作用于当前对话） ----
+			openPersona() {
+				this.showPersona = true
+			},
+			closePersona() {
+				this.showPersona = false
+			},
+			onPersonaSaved() {
+				this.showPersona = false
 				this.refreshHeader()
-				this.showHistory = false
-				uni.showToast({ title: '已复制记忆到新会话', icon: 'none' })
-			},
-			doCompress() {
-				if (this.loading) {
-					uni.showToast({ title: '请等待当前回复完成', icon: 'none' })
-					return
-				}
-				uni.showLoading({ title: '压缩中…' })
-				compressContext(true)
-					.then((done) => {
-						uni.hideLoading()
-						uni.showToast({ title: done ? '已压缩上文为概要' : '内容太少，暂无需压缩', icon: 'none' })
-					})
-					.catch((e) => {
-						uni.hideLoading()
-						uni.showToast({ title: '压缩失败：' + (e && e.message ? e.message : '未知错误'), icon: 'none' })
-					})
-			},
-			// ---- 导出聊天记录 ----
-			exportChat() {
-				exportChatToFile()
-			},
-			// ---- 侧边滑块 ----
-			querySlider() {
-				uni.createSelectorQuery()
-					.in(this)
-					.select('.slider-bar')
-					.boundingClientRect((rect) => {
-						if (rect) this.sliderRect = { top: rect.top, height: rect.height }
-					})
-					.exec()
-			},
-			onSliderStart(e) {
-				this.dragRatio = 0
-				this.updateDrag(e.touches[0])
-			},
-			onSliderMove(e) {
-				this.updateDrag(e.touches[0])
-			},
-			onSliderEnd() {
-				this.dragTip = ''
-				// dragRatio 保留在当前位置，不再重置
-			},
-			updateDrag(touch) {
-				if (!this.sliderRect || !this.displayRows.length) return
-				const ratio = Math.min(1, Math.max(0, (touch.clientY - this.sliderRect.top) / this.sliderRect.height))
-				this.dragRatio = ratio
-				const index = Math.round(ratio * (this.displayRows.length - 1))
-				this.scrollInto = 'msg-' + index
-				this.dragTip = index + 1 + ' / ' + this.displayRows.length
+				uni.showToast({ title: '已切换人格', icon: 'success' })
 			}
 		}
 	}
 </script>
 
-<style>
+<style scoped>
 	.page {
 		height: 100vh;
 		display: flex;
@@ -909,677 +321,9 @@
 		background: #f7f8fa;
 	}
 
-	.header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 16rpx 30rpx;
-		background: #ffffff;
-		border-bottom: 1rpx solid #eee;
-	}
-
-	.header-left {
-		display: flex;
-		align-items: baseline;
-	}
-
-	.persona {
-		font-size: 30rpx;
-		font-weight: 600;
-		color: #333;
-	}
-
-	.model {
-		margin-left: 16rpx;
-		font-size: 22rpx;
-		color: #999;
-	}
-
-	.header-right {
-		display: flex;
-		align-items: center;
-	}
-
-	.h-btn {
-		font-size: 26rpx;
-		color: #666;
-		padding: 8rpx 16rpx;
-	}
-
-	.h-btn.primary {
-		color: #5b7cfa;
-		font-weight: 600;
-	}
-
-	.scene-bar {
-		display: flex;
-		align-items: center;
-		padding: 12rpx 30rpx;
-		background: rgba(91, 124, 250, 0.08);
-		border-bottom: 1rpx solid #eee;
-	}
-
-	.scene-dot {
-		width: 12rpx;
-		height: 12rpx;
-		border-radius: 50%;
-		background: #5b7cfa;
-		margin-right: 12rpx;
-		flex-shrink: 0;
-	}
-
-	.scene-text {
-		flex: 1;
-		font-size: 24rpx;
-		color: #666;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
 	.msg-wrap {
 		flex: 1;
 		position: relative;
 		overflow: hidden;
-	}
-
-	.msg-list {
-		height: 100%;
-	}
-
-	.msg-inner {
-		padding: 20rpx 30rpx;
-		box-sizing: border-box;
-	}
-
-	.empty {
-		margin-top: 200rpx;
-		text-align: center;
-	}
-
-	.empty-name {
-		font-size: 40rpx;
-		color: #5b7cfa;
-		font-weight: 600;
-	}
-
-	.empty-tip {
-		margin-top: 16rpx;
-		font-size: 26rpx;
-		color: #bbb;
-	}
-
-	.msg-row {
-		display: flex;
-		margin-bottom: 20rpx;
-	}
-
-	.msg-row.user {
-		justify-content: flex-end;
-	}
-
-	.msg-foot {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		margin-top: 6rpx;
-	}
-
-	.regenerate {
-		font-size: 22rpx;
-		color: #999;
-		padding: 4rpx 16rpx;
-	}
-
-	.bubble {
-		max-width: 80%;
-		padding: 18rpx 24rpx;
-		border-radius: 20rpx;
-		font-size: 28rpx;
-		line-height: 1.6;
-		word-break: break-word;
-		white-space: pre-wrap;
-	}
-
-	.msg-row.assistant .bubble {
-		background: #ffffff;
-		color: #333;
-		border-top-left-radius: 6rpx;
-		box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
-	}
-
-	.msg-row.user .bubble {
-		background: #5b7cfa;
-		color: #fff;
-		border-top-right-radius: 6rpx;
-	}
-
-	.bubble.typing {
-		color: #aaa;
-	}
-
-	/* 表情消息：图片独立成行展示 */
-	.bubble-emoji {
-		width: 200rpx;
-		height: 200rpx;
-		border-radius: 12rpx;
-	}
-
-	.input-bar {
-		display: flex;
-		align-items: center;
-		padding: 16rpx 24rpx;
-		padding-bottom: calc(16rpx + env(safe-area-inset-bottom));
-		background: #ffffff;
-		border-top: 1rpx solid #eee;
-	}
-
-	.input {
-		flex: 1;
-		height: 76rpx;
-		background: #f2f3f5;
-		border-radius: 38rpx;
-		padding: 0 30rpx;
-		font-size: 28rpx;
-	}
-
-	.emoji-btn {
-		margin-left: 16rpx;
-		font-size: 26rpx;
-		color: #666;
-		padding: 8rpx 16rpx;
-	}
-
-	.emoji-btn.on {
-		color: #5b7cfa;
-		font-weight: 600;
-	}
-
-	.send-btn {
-		margin-left: 20rpx;
-		height: 76rpx;
-		line-height: 76rpx;
-		padding: 0 40rpx;
-		font-size: 28rpx;
-		color: #fff;
-		background: #5b7cfa;
-		border-radius: 38rpx;
-	}
-
-	.send-btn[disabled] {
-		background: #c8d0fa;
-		color: #fff;
-	}
-
-	/* ---- 表情栏 ---- */
-	.emoji-panel {
-		overflow: hidden;
-		max-height: 0;
-		opacity: 0;
-		transition: max-height 0.25s ease, opacity 0.25s ease;
-		background: #ffffff;
-		border-top: 1rpx solid #eee;
-	}
-
-	.emoji-panel.panel-open {
-		max-height: 520rpx;
-		opacity: 1;
-	}
-
-	.emoji-list {
-		max-height: 380rpx;
-	}
-
-	.emoji-grid {
-		display: flex;
-		flex-wrap: wrap;
-		padding: 16rpx;
-		box-sizing: border-box;
-	}
-
-	.emoji-empty {
-		width: 100%;
-		padding: 48rpx 0;
-		text-align: center;
-		font-size: 24rpx;
-		color: #bbb;
-	}
-
-	.emoji-item {
-		width: 25%;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 12rpx 0;
-		box-sizing: border-box;
-	}
-
-	/* 拖拽中的表情：略微放大悬浮，弱化原占位 */
-	.emoji-item.dragging {
-		opacity: 0.75;
-		transform: scale(1.1);
-	}
-
-	.emoji-thumb {
-		width: 100rpx;
-		height: 100rpx;
-	}
-
-	.emoji-name {
-		margin-top: 8rpx;
-		font-size: 20rpx;
-		color: #999;
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.emoji-tools {
-		display: flex;
-		border-top: 1rpx solid #eee;
-	}
-
-	.emoji-tool {
-		flex: 1;
-		text-align: center;
-		padding: 20rpx 0;
-		font-size: 26rpx;
-		color: #5b7cfa;
-	}
-
-	.emoji-tool + .emoji-tool {
-		border-left: 1rpx solid #eee;
-	}
-
-	.emoji-name-input {
-		width: 100%;
-		height: 76rpx;
-		background: #f2f3f5;
-		border-radius: 12rpx;
-		padding: 0 24rpx;
-		box-sizing: border-box;
-		font-size: 28rpx;
-	}
-
-	.preview-wrap {
-		display: flex;
-		justify-content: center;
-		margin-bottom: 24rpx;
-	}
-
-	.preview-img {
-		width: 200rpx;
-		height: 200rpx;
-		border-radius: 12rpx;
-	}
-
-	.slider-wrap {
-		position: absolute;
-		right: 6rpx;
-		top: 16rpx;
-		bottom: 16rpx;
-		width: 48rpx;
-		display: flex;
-		justify-content: center;
-		z-index: 10;
-	}
-
-	.slider-bar {
-		position: relative;
-		width: 8rpx;
-		height: 100%;
-		background: rgba(0, 0, 0, 0.15);
-		border-radius: 8rpx;
-	}
-
-	.slider-thumb {
-		position: absolute;
-		left: 0;
-		width: 8rpx;
-		height: 48px;
-		background: rgba(0, 0, 0, 0.4);
-		border-radius: 8rpx;
-	}
-
-	.slider-tip {
-		position: absolute;
-		right: 56rpx;
-		top: 50%;
-		transform: translateY(-50%);
-		background: rgba(0, 0, 0, 0.6);
-		color: #fff;
-		font-size: 24rpx;
-		padding: 8rpx 20rpx;
-		border-radius: 24rpx;
-		white-space: nowrap;
-	}
-
-	.jump-bottom {
-		position: absolute;
-		right: 96rpx;
-		bottom: 24rpx;
-		width: 88rpx;
-		height: 88rpx;
-		border-radius: 50%;
-		background: #5b7cfa;
-		box-shadow: 0 4rpx 16rpx rgba(91, 124, 250, 0.4);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 20;
-	}
-
-	.jump-arrow {
-		color: #fff;
-		font-size: 44rpx;
-		line-height: 1;
-	}
-
-	.mask {
-		position: fixed;
-		left: 0;
-		top: 0;
-		right: 0;
-		bottom: 0;
-		background: rgba(0, 0, 0, 0.45);
-		z-index: 999;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.edit-panel {
-		width: 640rpx;
-		background: #fff;
-		border-radius: 20rpx;
-		padding: 32rpx;
-		box-sizing: border-box;
-	}
-
-	.edit-title {
-		font-size: 32rpx;
-		font-weight: 600;
-		color: #333;
-		text-align: center;
-		margin-bottom: 24rpx;
-	}
-
-	.edit-area {
-		width: 100%;
-		height: 200rpx;
-		background: #f7f8fa;
-		border-radius: 12rpx;
-		padding: 20rpx;
-		box-sizing: border-box;
-		font-size: 28rpx;
-		line-height: 1.5;
-	}
-
-	.scene-history {
-		margin-top: 20rpx;
-	}
-
-	.scene-history-head {
-		font-size: 22rpx;
-		color: #999;
-		margin-bottom: 10rpx;
-	}
-
-	.scene-history-list {
-		max-height: 300rpx;
-	}
-
-	.scene-history-item {
-		display: flex;
-		align-items: center;
-		padding: 14rpx 20rpx;
-		background: #f7f8fa;
-		border-radius: 10rpx;
-		margin-bottom: 12rpx;
-	}
-
-	.scene-history-idx {
-		flex-shrink: 0;
-		width: 40rpx;
-		font-size: 22rpx;
-		color: #5b7cfa;
-	}
-
-	.scene-history-text {
-		flex: 1;
-		min-width: 0;
-		font-size: 24rpx;
-		color: #666;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.edit-btns {
-		display: flex;
-		margin-top: 32rpx;
-	}
-
-	.edit-btn {
-		flex: 1;
-		height: 80rpx;
-		line-height: 80rpx;
-		font-size: 28rpx;
-		border-radius: 40rpx;
-		margin: 0 10rpx;
-	}
-
-	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
-	}
-
-	.edit-btn.ok {
-		color: #fff;
-		background: #5b7cfa;
-	}
-
-	.history-panel {
-		width: 660rpx;
-		background: #fff;
-		border-radius: 20rpx;
-		padding: 32rpx;
-		box-sizing: border-box;
-	}
-
-	.history-list {
-		height: 560rpx;
-		margin-bottom: 24rpx;
-	}
-
-	.history-empty {
-		padding: 80rpx 0;
-		text-align: center;
-		font-size: 26rpx;
-		color: #bbb;
-	}
-
-	.history-item {
-		display: flex;
-		align-items: center;
-		padding: 20rpx 24rpx;
-		border-radius: 12rpx;
-		background: #f7f8fa;
-		margin-bottom: 16rpx;
-	}
-
-	.history-item.active {
-		background: #eef1fe;
-		border: 2rpx solid #5b7cfa;
-		box-sizing: border-box;
-	}
-
-	.history-main {
-		flex: 1;
-		min-width: 0;
-	}
-
-	.history-title {
-		font-size: 28rpx;
-		color: #333;
-		font-weight: 500;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.history-preview {
-		margin-top: 6rpx;
-		font-size: 22rpx;
-		color: #999;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.history-meta {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
-		margin-left: 16rpx;
-		flex-shrink: 0;
-	}
-
-	.history-time {
-		font-size: 20rpx;
-		color: #bbb;
-	}
-
-	.history-del {
-		margin-top: 10rpx;
-		font-size: 22rpx;
-		color: #f53f3f;
-		padding: 4rpx 8rpx;
-	}
-
-	.compress-btn {
-		margin-bottom: 16rpx;
-	}
-
-	.compress-btn[disabled] {
-		opacity: 0.5;
-		color: #fff;
-	}
-
-	.copy-btns {
-		display: flex;
-		margin-bottom: 16rpx;
-	}
-
-	.copy-btn {
-		flex: 1;
-		height: 76rpx;
-		line-height: 76rpx;
-		font-size: 26rpx;
-		color: #5b7cfa;
-		background: #eef1fe;
-		border-radius: 38rpx;
-	}
-
-	.copy-btn[disabled] {
-		opacity: 0.5;
-	}
-
-	.persona-panel {
-		width: 640rpx;
-		background: #fff;
-		border-radius: 20rpx;
-		padding: 32rpx;
-		box-sizing: border-box;
-	}
-
-	.persona-hint {
-		font-size: 22rpx;
-		color: #999;
-		text-align: center;
-		margin-bottom: 20rpx;
-	}
-
-	.persona-list {
-		height: 480rpx;
-	}
-
-	.persona-item {
-		padding: 18rpx 24rpx;
-		border-radius: 12rpx;
-		background: #f7f8fa;
-		margin-bottom: 16rpx;
-		border: 2rpx solid transparent;
-	}
-
-	.persona-item.active {
-		border-color: #5b7cfa;
-		background: #eef1fe;
-	}
-
-	.persona-item-name {
-		font-size: 28rpx;
-		color: #333;
-		font-weight: 500;
-	}
-
-	.persona-item-desc {
-		font-size: 22rpx;
-		color: #999;
-		margin-top: 4rpx;
-	}
-
-	.persona-item-head {
-		display: flex;
-		align-items: flex-start;
-	}
-
-	.persona-item-main {
-		flex: 1;
-		min-width: 0;
-	}
-
-	.persona-item-expand {
-		flex-shrink: 0;
-		margin-left: 16rpx;
-		padding-top: 2rpx;
-		font-size: 22rpx;
-		color: #5b7cfa;
-	}
-
-	.persona-item-prompt {
-		margin-top: 14rpx;
-		padding: 16rpx;
-		background: #fff;
-		border-radius: 10rpx;
-		border: 1rpx solid #e5e6eb;
-		font-size: 22rpx;
-		color: #666;
-		line-height: 1.7;
-		white-space: pre-wrap;
-		word-break: break-word;
-	}
-
-	.prompt-fill {
-		margin-top: 14rpx;
-		display: inline-block;
-		font-size: 22rpx;
-		color: #5b7cfa;
-		border: 1rpx solid #5b7cfa;
-		border-radius: 22rpx;
-		padding: 6rpx 20rpx;
-	}
-
-	.persona-custom {
-		width: 100%;
-		height: 260rpx;
-		background: #f7f8fa;
-		border-radius: 12rpx;
-		padding: 20rpx;
-		box-sizing: border-box;
-		font-size: 26rpx;
-		line-height: 1.6;
-		margin-top: 8rpx;
 	}
 </style>

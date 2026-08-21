@@ -46,14 +46,20 @@
 ├── App.vue                # 启动时初始化存储 + 记忆维护
 ├── pages.json             # 页面注册 + tabBar（聊天 / 记忆 / 设置）
 ├── pages/
-│   ├── chat/chat.vue      # 聊天页（历史 / 新对话 / 人格设置 / 情景 / 导出 / 压缩）
+│   ├── chat/
+│   │   ├── chat.vue          # 聊天页骨架（持有会话状态，子组件协调）
+│   │   └── components/       # header / msg-list / input-bar / emoji-panel / scene-edit / history / persona
 │   ├── memory/memory.vue  # 记忆页（筛选 / 新建 / 编辑 / 多选删除）
 │   └── settings/settings.vue  # 设置页（接口 / API预设 / 思考模式 / 人格 / 背景 / 调试日志）
 ├── utils/
 │   ├── storage.js         # 跨端持久化层（多会话模型 / 情景 / API 预设 / 背景图）
 │   ├── memory.js          # 记忆核心（L1/L2/L3、相似度去重、分层检索、维护）
 │   ├── prompts.js         # 系统提示词构建 + 人格/接口预设
-│   ├── chat.js            # 聊天服务编排（会话管理 / 上下文压缩 / 记忆单例）
+│   ├── chat.js            # 聊天服务门面 + 发送主链路（统一对外导出）
+│   ├── chat-state.js      # 聊天服务共享状态（memoryStore 单例 / 最近请求缓存）
+│   ├── chat-settings.js   # 设置域（全局默认 + 会话设置快照）
+│   ├── chat-conversations.js # 会话域（新建/切换/删除/复制 + 历史展示）
+│   ├── chat-compress.js   # 压缩域（上下文压缩）
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（流式控制 / 思考控制 / 日志埋点）
 │   ├── log.js             # 调试日志环形缓冲
 │   └── export.js          # 聊天记录导出

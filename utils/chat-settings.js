@@ -1,0 +1,102 @@
+/**
+ * 聊天服务 —— 设置域：
+ * 全局默认设置读取 / 会话设置快照读写（每个对话独享一份）/ 会话人格保存
+ */
+
+import {
+	getSetting,
+	getConversationSettingsRaw,
+	setConversationSettingsRaw,
+	getConversationPersonality
+} from './storage.js'
+import { getPersonaName } from './prompts.js'
+import { addLog } from './log.js'
+
+/** 人格名称（含自定义，供 UI 展示） */
+export function personaName(id) {
+	return getPersonaName(id)
+}
+
+/** 全局默认设置（无设置快照的会话回退用；设置面板编辑的是当前会话设置） */
+export function getSettings() {
+	const personalityId = getSetting('personalityId', 'gentle')
+	return {
+		baseUrl: getSetting('baseUrl', 'https://api.openai.com/v1'),
+		apiKey: getSetting('apiKey', ''),
+		model: getSetting('model', 'gpt-5.4-mini'),
+		temperature: parseFloat(getSetting('temperature', '0.8')),
+		reasoningEffort: getSetting('reasoningEffort', 'none'), // 思考模式：none 关闭 / high 开启 / '' 跟随模型（Ollama 等兼容接口经 reasoning_effort 控制）
+		personalityId,
+		customPrompt: getSetting('customPrompt', ''),
+		timeMode: getSetting('timeMode', 'real'), // 情景时间模式：real 现实时间 / virtual 虚拟时间
+		compressInterval: parseInt(getSetting('compressInterval', '0'), 10) || 0, // 自动压缩间隔（条），0=关闭
+		maxRequestAttempts: parseInt(getSetting('maxRequestAttempts', '5'), 10) || 5, // 回复格式不合格时的最大请求次数（重试上限）
+		emojiEnabled: getSetting('emojiEnabled', true) !== false, // 聊天表情包开关：关闭后请求不携带表情清单
+		personaName: getPersonaName(personalityId)
+	}
+}
+
+/** 归一化设置对象（saveSettings / saveConversationPersonality / 新对话复制统一调用） */
+export function normalizeSettings(s) {
+	return {
+		baseUrl: String(s && s.baseUrl ? s.baseUrl : '').trim(),
+		apiKey: String(s && s.apiKey ? s.apiKey : '').trim(),
+		model: String(s && s.model ? s.model : '').trim(),
+		temperature: Number.isFinite(parseFloat(s && s.temperature)) ? parseFloat(s.temperature) : 0.8,
+		reasoningEffort: (s && s.reasoningEffort) || '',
+		personalityId: (s && s.personalityId) || 'gentle',
+		customPrompt: String(s && s.customPrompt ? s.customPrompt : '').trim(),
+		timeMode: s && s.timeMode === 'virtual' ? 'virtual' : 'real',
+		compressInterval: parseInt(s && s.compressInterval, 10) || 0,
+		maxRequestAttempts: Math.max(1, Math.min(20, parseInt(s && s.maxRequestAttempts, 10) || 5)),
+		emojiEnabled: !s || s.emojiEnabled !== false
+	}
+}
+
+/** 保存设置到当前会话（每个对话独享一份设置，设置面板与之同步） */
+export function saveSettings(s) {
+	setConversationSettingsRaw(normalizeSettings(s))
+}
+
+/**
+ * 当前会话生效设置 = 会话设置快照（无快照回退全局；旧数据兼容仅人格子集的快照）。
+ * 每个会话独立一套完整设置，切换会话即切换设置。
+ */
+export function getConversationSettings() {
+	const s = getSettings()
+	const raw = getConversationSettingsRaw()
+	if (raw) {
+		const merged = { ...s, ...raw }
+		merged.temperature = Number.isFinite(parseFloat(raw.temperature)) ? parseFloat(raw.temperature) : s.temperature
+		merged.compressInterval = parseInt(raw.compressInterval, 10) || 0
+		merged.maxRequestAttempts = Math.max(1, Math.min(20, parseInt(raw.maxRequestAttempts, 10) || 5))
+		merged.personaName = getPersonaName(merged.personalityId || s.personalityId)
+		return merged
+	}
+	// 旧数据：会话仅存人格子集（personalityId/customPrompt/timeMode）
+	const p = getConversationPersonality()
+	return {
+		...s,
+		personalityId: (p && p.personalityId) || s.personalityId,
+		customPrompt: p && p.customPrompt !== undefined ? p.customPrompt : s.customPrompt,
+		timeMode: (p && p.timeMode) || s.timeMode,
+		personaName: getPersonaName((p && p.personalityId) || s.personalityId)
+	}
+}
+
+/**
+ * 保存当前会话的人格设置（写入会话设置快照，仅作用于当前对话，不影响其他会话）。
+ * timeMode 可选：不传则沿用当前会话生效的模式，保持会话内的情景时间设置不漂移。
+ */
+export function saveConversationPersonality(personalityId, customPrompt, timeMode) {
+	const s = getConversationSettings()
+	setConversationSettingsRaw(
+		normalizeSettings({
+			...s,
+			personalityId,
+			customPrompt: personalityId === 'custom' ? (customPrompt || '') : '',
+			timeMode: timeMode !== undefined ? timeMode : s.timeMode
+		})
+	)
+	addLog('info', '会话人格', `${getPersonaName(personalityId)}${personalityId === 'custom' ? '（自定义）' : ''}`)
+}

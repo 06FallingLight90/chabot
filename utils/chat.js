@@ -1,49 +1,75 @@
 /**
- * 聊天服务 —— 编排一次完整对话：
- * 检索记忆 → 组装 system（人格 + 记忆指南 + 记忆上下文）→ 调用 LLM →
- * 落库对话 → 解析 Memory 行入库 → 定期维护
+ * 聊天服务 —— 门面 + 消息域：
+ * 对外统一导出（其余域拆分至 chat-settings / chat-conversations / chat-compress），
+ * 本文件承载发送主链路：检索记忆 → 组装 system → 调用 LLM → 落库 → 维护，
+ * 以及"重新生成"的撤回逻辑与回复格式校验。
  */
 
 import {
 	initStorage,
 	getChatRows,
 	addChatRow,
-	clearChat,
 	truncateChat,
 	getSetting,
 	setSetting,
 	getSceneHistory,
 	setScene,
-	getConversations,
-	getActiveConversationId,
-	createConversation,
-	switchConversation,
-	deleteConversation,
-	getConversationCompression,
-	setConversationCompression,
-	getConversationPersonality,
-	getConversationSettingsRaw,
-	setConversationSettingsRaw,
-	duplicateConversationToNew,
-	duplicateMemoriesToNew,
-	truncateSceneHistory
+	truncateSceneHistory,
+	getConversationCompression
 } from './storage.js'
-import { MemoryStore, parseMemoryLine } from './memory.js'
-import { buildSystemPrompt, buildNowText, getPersonalityById, getPersonaName } from './prompts.js'
+import { memoryStore, lastRequest } from './chat-state.js'
+import {
+	personaName,
+	getSettings,
+	saveSettings,
+	getConversationSettings,
+	saveConversationPersonality
+} from './chat-settings.js'
+import {
+	getHistoryForUI,
+	clearConversation,
+	listConversations,
+	activeConversationId,
+	startNewConversation,
+	openConversation,
+	removeConversation,
+	copyConversationToNew,
+	copyMemoriesToNew
+} from './chat-conversations.js'
+import { compressContext, maybeCompress } from './chat-compress.js'
+import { parseMemoryLine } from './memory.js'
+import { buildSystemPrompt, buildNowText, getPersonalityById } from './prompts.js'
 import { chatCompletion } from './llm.js'
 import { addLog } from './log.js'
 import { getEmojiMap, emojiListForPrompt, extractEmojiNames } from './emojis.js'
 
-export const memoryStore = new MemoryStore()
+// ---------- 对外统一导出（门面） ----------
+// chat.js 保持为唯一入口，各调用方（页面/工具/测试）的导入路径不变
+
+export {
+	memoryStore,
+	personaName,
+	getSettings,
+	saveSettings,
+	getConversationSettings,
+	saveConversationPersonality,
+	getHistoryForUI,
+	clearConversation,
+	listConversations,
+	activeConversationId,
+	startNewConversation,
+	openConversation,
+	removeConversation,
+	copyConversationToNew,
+	copyMemoriesToNew,
+	compressContext,
+	maybeCompress
+}
+
+// ---------- 消息域 ----------
 
 const HISTORY_ENTRIES = 15 // 每轮注入的对话历史条数（上限）
 const MAINTENANCE_INTERVAL_MS = 30 * 60 * 1000 // 维护节流间隔（30 分钟）
-const COMPRESS_KEEP_TAIL = 10 // 压缩时保留的最近完整消息条数
-const COMPRESS_MIN_NEW = 4 // 每次压缩至少新增这么多条才执行
-const COMPRESS_CHUNK = 80 // 单次压缩请求处理的最大消息条数（超出分批多次调用）
-const COMPRESS_SYSTEM = `你是对话压缩助手。把对话压缩成一份精炼概要，用于替代原文作为后续上下文。
-要求：保留关键事实、用户偏好、已做的决定、约定和正在进行的事；保留重要人物/时间/地点信息；
-用中文，150 字以内，只输出概要本身，不要解释、不要分段标题。`
 
 /** 初始化存储（幂等，App.vue onLaunch 调用） */
 export function initChatService() {
@@ -66,131 +92,6 @@ export function maybeMaintenance() {
 	setSetting('lastMaintenance', new Date().toISOString())
 }
 
-/** 人格名称（含自定义，供 UI 展示） */
-export function personaName(id) {
-	return getPersonaName(id)
-}
-
-/** 全局默认设置（无设置快照的会话回退用；设置面板编辑的是当前会话设置） */
-export function getSettings() {
-	const personalityId = getSetting('personalityId', 'gentle')
-	return {
-		baseUrl: getSetting('baseUrl', 'https://api.openai.com/v1'),
-		apiKey: getSetting('apiKey', ''),
-		model: getSetting('model', 'gpt-5.4-mini'),
-		temperature: parseFloat(getSetting('temperature', '0.8')),
-		reasoningEffort: getSetting('reasoningEffort', 'none'), // 思考模式：none 关闭 / high 开启 / '' 跟随模型（Ollama 等兼容接口经 reasoning_effort 控制）
-		personalityId,
-		customPrompt: getSetting('customPrompt', ''),
-		timeMode: getSetting('timeMode', 'real'), // 情景时间模式：real 现实时间 / virtual 虚拟时间
-		compressInterval: parseInt(getSetting('compressInterval', '0'), 10) || 0, // 自动压缩间隔（条），0=关闭
-		maxRequestAttempts: parseInt(getSetting('maxRequestAttempts', '5'), 10) || 5, // 回复格式不合格时的最大请求次数（重试上限）
-		emojiEnabled: getSetting('emojiEnabled', true) !== false, // 聊天表情包开关：关闭后请求不携带表情清单
-		personaName: getPersonaName(personalityId)
-	}
-}
-
-/** 归一化设置对象（saveSettings / saveConversationPersonality / 新对话复制统一调用） */
-function normalizeSettings(s) {
-	return {
-		baseUrl: String(s && s.baseUrl ? s.baseUrl : '').trim(),
-		apiKey: String(s && s.apiKey ? s.apiKey : '').trim(),
-		model: String(s && s.model ? s.model : '').trim(),
-		temperature: Number.isFinite(parseFloat(s && s.temperature)) ? parseFloat(s.temperature) : 0.8,
-		reasoningEffort: (s && s.reasoningEffort) || '',
-		personalityId: (s && s.personalityId) || 'gentle',
-		customPrompt: String(s && s.customPrompt ? s.customPrompt : '').trim(),
-		timeMode: s && s.timeMode === 'virtual' ? 'virtual' : 'real',
-		compressInterval: parseInt(s && s.compressInterval, 10) || 0,
-		maxRequestAttempts: Math.max(1, Math.min(20, parseInt(s && s.maxRequestAttempts, 10) || 5)),
-		emojiEnabled: !s || s.emojiEnabled !== false
-	}
-}
-
-/** 保存设置到当前会话（每个对话独享一份设置，设置面板与之同步） */
-export function saveSettings(s) {
-	setConversationSettingsRaw(normalizeSettings(s))
-}
-
-/**
- * 当前会话生效设置 = 会话设置快照（无快照回退全局；旧数据兼容仅人格子集的快照）。
- * 每个会话独立一套完整设置，切换会话即切换设置。
- */
-export function getConversationSettings() {
-	const s = getSettings()
-	const raw = getConversationSettingsRaw()
-	if (raw) {
-		const merged = { ...s, ...raw }
-		merged.temperature = Number.isFinite(parseFloat(raw.temperature)) ? parseFloat(raw.temperature) : s.temperature
-		merged.compressInterval = parseInt(raw.compressInterval, 10) || 0
-		merged.maxRequestAttempts = Math.max(1, Math.min(20, parseInt(raw.maxRequestAttempts, 10) || 5))
-		merged.personaName = getPersonaName(merged.personalityId || s.personalityId)
-		return merged
-	}
-	// 旧数据：会话仅存人格子集（personalityId/customPrompt/timeMode）
-	const p = getConversationPersonality()
-	return {
-		...s,
-		personalityId: (p && p.personalityId) || s.personalityId,
-		customPrompt: p && p.customPrompt !== undefined ? p.customPrompt : s.customPrompt,
-		timeMode: (p && p.timeMode) || s.timeMode,
-		personaName: getPersonaName((p && p.personalityId) || s.personalityId)
-	}
-}
-
-/**
- * 保存当前会话的人格设置（写入会话设置快照，仅作用于当前对话，不影响其他会话）。
- * timeMode 可选：不传则沿用当前会话生效的模式，保持会话内的情景时间设置不漂移。
- */
-export function saveConversationPersonality(personalityId, customPrompt, timeMode) {
-	const s = getConversationSettings()
-	setConversationSettingsRaw(
-		normalizeSettings({
-			...s,
-			personalityId,
-			customPrompt: personalityId === 'custom' ? (customPrompt || '') : '',
-			timeMode: timeMode !== undefined ? timeMode : s.timeMode
-		})
-	)
-	addLog('info', '会话人格', `${getPersonaName(personalityId)}${personalityId === 'custom' ? '（自定义）' : ''}`)
-}
-
-/** 剔除消息文本行首的 Scene/Memory 标记行（修复旧数据：早期落库过含标记的完整回复） */
-function stripMetaLines(content) {
-	const clean = String(content || '')
-		.split('\n')
-		.filter((l) => !/^\s*(Scene|Memory)\s*[:：]/i.test(l))
-		.join('\n')
-		.trim()
-	return clean || '…'
-}
-
-/** 聊天页历史（返回副本，剔除遗留的 Scene/Memory 标记行后展示） */
-export function getHistoryForUI() {
-	return getChatRows().map((r) => ({ ...r, content: stripMetaLines(r.content) }))
-}
-
-/** 清空对话 */
-export function clearConversation() {
-	clearChat()
-	syncLastRequest()
-	addLog('info', '清空当前对话')
-}
-
-let _lastRequest = '' // 最近一次请求内容缓存，"重新生成"直接重发（不重复落库用户消息）
-
-/** 同步请求缓存到当前会话的最后一条用户消息（切会话/清空后调用，避免跨会话重发错内容） */
-function syncLastRequest() {
-	const rows = getChatRows()
-	for (let i = rows.length - 1; i >= 0; i--) {
-		if (rows[i].role === 'user') {
-			_lastRequest = rows[i].content
-			return
-		}
-	}
-	_lastRequest = ''
-}
-
 /**
  * 用户点"重新生成"时调用：移除待重发请求对应的最后一条助手回复（撤回其情景与记忆）。
  * 返回待重发内容——优先取最近一次请求缓存，无缓存（如重启后）回退到当前会话最后一条用户消息；
@@ -199,7 +100,7 @@ function syncLastRequest() {
 export function popLastAssistant() {
 	const rows = getChatRows()
 	// 待重发内容：最近一次请求缓存优先；无缓存（如重启后）回退到最后一条用户消息
-	let req = _lastRequest
+	let req = lastRequest.value
 	if (!req) {
 		for (let i = rows.length - 1; i >= 0; i--) {
 			if (rows[i].role === 'user') {
@@ -241,157 +142,6 @@ function rollbackAssistantEffects(row) {
 	addLog('info', '撤回响应情景与记忆', `情景截断到 ${rb.sceneLenBefore}，撤销记忆 ${(undos && undos.length) || 0} 条`)
 }
 
-// ---------- 会话管理 ----------
-
-/** 会话列表（供历史对话弹窗展示） */
-export function listConversations() {
-	return getConversations()
-}
-
-/** 当前会话 id */
-export function activeConversationId() {
-	return getActiveConversationId()
-}
-
-/** 开始新对话：当前对话非空则归档并新建，否则复用并重置当前空对话；新对话复制当前设置（每个对话独享一份设置） */
-export function startNewConversation() {
-	memoryStore.resetState()
-	// 记录创建前的当前会话生效设置（含无快照会话的全局回退值），供新对话复制
-	const currentSettings = getConversationSettings()
-	if (getChatRows().length) {
-		createConversation()
-		addLog('info', '开始新对话')
-	} else {
-		clearChat()
-		addLog('info', '重置空对话')
-	}
-	setConversationSettingsRaw(normalizeSettings(currentSettings))
-	syncLastRequest()
-}
-
-/** 切换到指定会话（记忆与人格随会话切换，重置召回状态） */
-export function openConversation(id) {
-	const ok = switchConversation(id)
-	if (ok) {
-		memoryStore.resetState()
-		syncLastRequest()
-		addLog('info', '切换会话', id)
-	}
-	return ok
-}
-
-/** 删除指定会话 */
-export function removeConversation(id) {
-	const ok = deleteConversation(id)
-	if (ok) {
-		memoryStore.resetState()
-		syncLastRequest()
-		addLog('info', '删除会话', id)
-	}
-	return ok
-}
-
-/** 复制当前会话（消息+记忆+人格）到新会话并切换 */
-export function copyConversationToNew() {
-	duplicateConversationToNew()
-	memoryStore.resetState()
-	syncLastRequest()
-	addLog('info', '复制对话到新会话')
-}
-
-/** 复制当前会话的记忆到新会话并切换 */
-export function copyMemoriesToNew() {
-	duplicateMemoriesToNew()
-	memoryStore.resetState()
-	syncLastRequest()
-	addLog('info', '复制记忆到新会话')
-}
-
-// ---------- 上下文压缩 ----------
-
-let _compressing = false
-
-/**
- * 把上文交给 LLM 压缩为概要（手动或自动触发）。
- * 压缩范围：上次压缩进度之后、保留尾部之前的消息；超过单批上限时分批调用。
- * @param {boolean} force 手动触发传 true，忽略间隔/新增量限制
- * @returns {Promise<boolean>} 是否实际执行了压缩
- */
-export async function compressContext(force = false) {
-	if (_compressing) return false
-	const rows = getChatRows()
-	const keepTail = COMPRESS_KEEP_TAIL
-	if (rows.length <= keepTail + COMPRESS_MIN_NEW) return false
-
-	const { summary: prev, compressedUntil } = getConversationCompression()
-	const since = Math.min(compressedUntil, rows.length - keepTail)
-	const cut = Math.max(since, rows.length - keepTail)
-	if (!force && cut - since < COMPRESS_MIN_NEW) return false
-	if (cut <= since) return false
-
-	const s = getConversationSettings()
-	if (!s.apiKey || !s.baseUrl || !s.model) return false
-
-	_compressing = true
-	try {
-		let merged = prev
-		let cursor = since
-		// 分批压缩，后一批把前一批的概要合并进来，避免单次请求过大
-		while (cursor < cut) {
-			const end = Math.min(cursor + COMPRESS_CHUNK, cut)
-			const batch = rows.slice(cursor, end)
-			const text = [
-				merged ? `已有的对话概要：\n${merged}` : '',
-				'以下是对话记录（越靠后越新）：',
-				batch.map((r) => `${r.role === 'user' ? '用户' : '你'}：${r.content}`).join('\n'),
-				'请把已有概要与新内容合并，输出一份完整的精炼概要。'
-			].filter(Boolean).join('\n\n')
-			const resp = await chatCompletion({
-				baseUrl: s.baseUrl,
-				apiKey: s.apiKey,
-				model: s.model,
-				messages: [
-					{ role: 'system', content: COMPRESS_SYSTEM },
-					{ role: 'user', content: text }
-				],
-				temperature: 0.3,
-				maxTokens: 512,
-				reasoningEffort: 'none' // 压缩任务简单，固定关闭思考，避免被思考 token 占满
-			})
-			const out = (resp.text || '').trim()
-			if (!out) return false
-			merged = out
-			cursor = end
-		}
-		setConversationCompression(merged, cut)
-		addLog(
-			'info',
-			'压缩上文',
-			`压缩 ${cut - since} 条消息为概要（保留尾部 ${keepTail} 条）\n--- 压缩后上文 ---\n${merged}`
-		)
-		return true
-	} catch (e) {
-		addLog('err', '压缩上文失败', e.message)
-		throw e
-	} finally {
-		_compressing = false
-	}
-}
-
-/**
- * 自动压缩检查：距上次压缩新增消息达到间隔阈值则压缩。
- * 在每次对话回复落库后调用（异步、失败静默，不阻塞回复）。
- */
-export async function maybeCompress() {
-	if (_compressing) return false
-	const interval = getConversationSettings().compressInterval
-	if (!interval) return false
-	const { compressedUntil } = getConversationCompression()
-	if (getChatRows().length - compressedUntil < interval) return false
-	addLog('info', '自动压缩触发', `间隔 ${interval} 条`)
-	return compressContext()
-}
-
 /**
  * 发送一条用户消息
  * @param {string} userText
@@ -408,7 +158,7 @@ export async function sendMessage(userText, opts = {}) {
 	if (!s.model) throw new Error('请先在「设置」中填写模型名称')
 
 	// 缓存最近一次请求：聊天页"重新生成"直接重发该内容（重发时 persistUser:false，不重复落库用户消息）
-	_lastRequest = userText
+	lastRequest.value = userText
 
 	// 记录发送前的情景历史长度：若本响应更新了情景，重新生成时据此撤回
 	const sceneLenBefore = getSceneHistory().length

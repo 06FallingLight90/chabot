@@ -24,18 +24,28 @@
 ├── App.vue                # onLaunch 初始化存储 + 记忆维护
 ├── pages.json             # 页面注册 + tabBar（聊天/记忆/设置）
 ├── pages/
-│   ├── chat/chat.vue      # 聊天页（背景图、消息列表、输入、会话历史/新对话/压缩入口）
+│   ├── chat/
+│   │   ├── chat.vue          # 聊天页骨架（持有会话状态，子组件通过 props/$emit 协调）
+│   │   └── components/       # 聊天页子组件：header / msg-list / input-bar / emoji-panel / scene-edit / history / persona
 │   ├── memory/memory.vue  # 记忆页（筛选/新建/编辑内容/优先级/级别/多选删除）
-│   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/请求次数/人格/聊天背景/上下文压缩/数据管理/调试日志）
+│   ├── emoji/emoji.vue    # 表情管理页（批量上传逐张命名/改名/删除）
+│   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/请求次数/人格/聊天表情包/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
 │   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
 │   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
-│   ├── prompts.js         # 系统提示词构建 + 人格预设 + 接口预设
+│   ├── prompts.js         # 系统提示词构建 + 人格预设 + 表情包引导 + 自定义示例 + 接口预设
+│   ├── emojis.js          # 表情包数据层（全局列表、名称校验、跨端图片持久化、$名$ 解析、拖拽重排）
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，stream:false + reasoning_effort 思考控制）
 │   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
 │   ├── export.js          # 聊天记录导出（H5 下载 / App 写文档目录 / 小程序复制降级）
-│   └── chat.js            # 聊天服务编排（导出 memoryStore 单例 + 会话管理 + 上下文压缩）
-└── scripts/test-memory.mjs  # 核心逻辑断言测试
+│   ├── chat.js            # 聊天服务门面 + 发送主链路（统一对外导出，各调用方/测试入口不变）
+│   ├── chat-state.js      # 聊天服务共享状态（memoryStore 单例 + 最近请求缓存，消除跨模块循环依赖）
+│   ├── chat-settings.js   # 聊天服务设置域（全局默认 + 会话设置快照 + 会话人格保存）
+│   ├── chat-conversations.js # 聊天服务会话域（新建/切换/删除/复制 + 历史展示/清空）
+│   └── chat-compress.js   # 聊天服务压缩域（上下文压缩）
+└── scripts/
+    ├── test-memory.mjs    # 记忆核心逻辑断言测试
+    └── test-emojis.mjs    # 表情包逻辑断言测试
 ```
 
 ## 核心设计
@@ -68,7 +78,7 @@
 - **情景历史**：情景（key `scene`）存为最多 10 条字符串数组（FIFO，`getSceneHistory()`），`getScene()` 返回最新一条；相同情景不重复记录，空值清除全部
 - **API 配置预设**：`chabot_setting_api_profiles` 存至多 3 套 `{id,name,baseUrl,apiKey,model,temperature}`，`saveApiProfile(i,name,cfg)`（越界拒绝、覆盖保留 id）/ `deleteApiProfile(i)` / `getApiProfile(i)` 供设置页快速填充与切换
 
-### 会话管理（utils/chat.js + storage.js）
+### 会话管理（utils/chat-conversations.js + storage.js）
 
 - **开始新对话** `startNewConversation`：当前会话非空则归档新建，为空则重置复用；**新对话复制当前会话的完整设置**（`saveSettings`/设置面板/新建对话统一走 `setConversationSettingsRaw`）
 - **历史弹窗**（聊天页头部「历史」）：`listConversations` 按更新时间倒序返回标题/预览；`openConversation` 切换当前会话（设置随之切换）；`removeConversation` 删除（删除当前会话自动切到最近一个）
@@ -78,19 +88,19 @@
 
 ### 聊天链路（utils/chat.js）
 
-`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → **`parseAndValidateReply` 格式校验**（须含对话文本、Scene 行有内容、Memory 行可解析；检测非行首 `Scene:`/`Memory:` 标记（未独立成行）与"缺 `Memory:` 前缀却带 `| keywords:`/`| importance:`/`| level:` 结构"的伪 Memory 行；不合格自动重新请求，上限设置项 `maxRequestAttempts`，默认 5，达上限抛错）→ 校验通过才解析 `Scene:` 行更新情景、`Memory:` 行入库并得到清理后的回复文本 → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
+`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文+表情包清单[`emojiEnabled` 开启且有表情时，见 `EMOJI_GUIDE`]）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → **`parseAndValidateReply` 格式校验**（须含对话文本、Scene 行有内容、Memory 行可解析；检测非行首 `Scene:`/`Memory:` 标记（未独立成行）与"缺 `Memory:` 前缀却带 `| keywords:`/`| importance:`/`| level:` 结构"的伪 Memory 行；回复中的 `$表情名$` 必须在表情清单内，否则判定格式不合格；不合格自动重新请求，上限设置项 `maxRequestAttempts`，默认 5，达上限抛错）→ 校验通过才解析 `Scene:` 行更新情景、`Memory:` 行入库并得到清理后的回复文本 → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
 
 ### 上下文压缩（utils/chat.js）
 
 - **触发**：手动 `compressContext(true)`（聊天页历史弹窗「压缩上文为概要」）/ 自动 `maybeCompress`（每轮回复落库后异步检查，设置项 `compressInterval` 条数，0=关闭）
 - **压缩范围**：上次进度 `compressedUntil` 之后、保留最近 10 条（`COMPRESS_KEEP_TAIL`）之前的消息；超过 80 条（`COMPRESS_CHUNK`）分批调用、逐批把旧概要并入新概要，避免单次请求过大
 - **概要存储**：写入当前会话 `summary`/`compressedUntil`；后续请求注入 system 消息「此前对话概要：…」，原始消息仍完整保留可翻阅（仅发送层省略）
-- 关键常量位于 `chat.js` 顶部
+- 关键常量位于 `chat-compress.js` 顶部
 
 ### 调试日志（utils/log.js）
 
 - 环形缓冲 200 条（`MAX_LOGS`），单条详情上限 30000 字符（`MAX_DETAIL_CHARS`）防存储膨胀；`addLog(type, msg, detail)`，type：`req`/`res`/`err`/`info`
-- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作、压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）、保存/删除 API 预设
+- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作（会话域在 `chat-conversations.js`）；`chat-compress.js` 压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）、保存/删除 API 预设
 - **设置页调试面板**：类型徽章（请求蓝/响应绿/错误红/信息灰）+ 摘要 + 时间，点击条目展开完整详情（收起态 JS 截断前 200 字符预览，不用 CSS line-clamp，兼容性可靠）；支持刷新与一键清空
 
 ### 当前情景（Scene）
@@ -102,13 +112,26 @@
 - 提示词见 `prompts.js` 的 `SCENE_GUIDE` 与 `buildNowText`
 - **时间模式**（设置项 `timeMode`）：`real` 现实时间（默认）注入 `buildNowText()` 供情景判断；`virtual` 虚拟时间不发送真实时间，情景由 LLM 自由想象（适合角色扮演）
 
+### 表情包系统（utils/emojis.js + 聊天页）
+
+- **存储**：`chabot_emojis` 全局数组 `{id, name, src, created_at}`，**不随会话切换**；数量上限 `EMOJI_MAX_COUNT=50`
+- **表情名**：上传时必填、≤20 字、全局唯一、不含 `$`/换行（`validateEmojiName` 统一校验）；消息中用 `$表情名$` 占位引用
+- **图片持久化**：App/小程序 `uni.saveFile` 持久化路径；H5 canvas 压缩为小尺寸 PNG base64（限宽 300px、单图 ≤300KB）防 localStorage 配额打满（`_h5EmojiToBase64`）
+- **解析与校验**：`splitEmojiText(content, map)` 纯函数把消息拆为文本段/表情段（清单外的未知 `$名$` 原样保留为文本，供消息分条渲染）；`extractEmojiNames` 提取占位名供 LLM 回复校验
+- **管理**：`pages/emoji/emoji.vue`——批量上传（`uni.chooseImage count:9`，选图后**逐张命名**，弹窗显示进度与预览）、改名、删除（顺带清理已存图片文件）；`reorderEmojis(orderedIds)` 拖拽重排（未知 id 忽略、遗漏项自动补位）
+- **聊天页交互**：输入框右侧「表情」按钮展开表情栏（常驻渲染 + `max-height`/`opacity` 过渡动画）；**短按**点击插入 `$表情名$`、**滑动**滚动面板、**长按 2 秒**进入拖动排序（被拖项 `scale(1.1)` 放大 `fixed` 跟随手指，`touchmove` 按格子位置实时重排——`splice` 移除后插入实现"其后顺延一位"，松手 `reorderEmojis` 持久化，拖拽结束抑制一次 tap 防误发送）；点击消息区 / 唤起键盘自动收起表情栏
+- **键盘适配**：App 端聊天页 `pages.json` 配置 `softinputMode: adjustResize`（键盘弹出压缩视口）；表情栏打开时唤起键盘，先不关闭表情栏、等 `uni.onKeyboardHeightChange` 上报键盘高度（视口已压缩）后再关闭，输入栏直接从"表情栏上方"落到"键盘上方"；表情栏/键盘升起后消息列表滚动对齐底部（H5 靠 `window.resize`）
+- **LLM 互动**：`sendMessage` 把表情清单注入 system（`prompts.js` 的 `EMOJI_GUIDE`，无表情/`emojiEnabled=false` 时不注入）；`parseAndValidateReply` 校验回复中 `$名$` 必须存在于清单，否则判定格式不合格自动重试
+- **设置项**：`emojiEnabled`（settings.vue「聊天表情包」，随会话快照存储，默认开启），关闭后请求不携带清单，LLM 不会主动使用表情（手动插入与渲染不受影响）
+
 ### 聊天页 UI
 
+- **组件化**：聊天页拆为页面骨架 + 7 个子组件（`pages/chat/components/`）——header（头部+情景条）/ msg-list（消息列表+侧边滑块+回到底部）/ input-bar / emoji-panel（表情栏+拖拽+上传弹窗）/ scene-edit / history / persona。页面持有会话状态（messages/scene/loading/input 等），子组件通过 props 下发 + `$emit` 上报，`msg-list` 的滚动/滑块内部自治并经 `ref` 暴露 `scrollBottom()`/`resetScrollState()`
 - 背景图固定于 scroll-view 可视区（cover 铺满，不随内容拉伸/滚动）
 - 头部「人格名（点击设置）/ 历史 / 新对话 / 清空」：人格名点击弹出「当前对话人格」设置（预置 4 款 + 自定义提示词，保存写入会话快照）；历史弹窗切换/删除会话、压缩上文、**导出对话为 .txt**（`utils/export.js`：H5 Blob 下载带 BOM、App plus.io 写 `_doc` 并尝试系统打开、小程序复制全文降级）
 - **一键回到底部**：右下角浮动按钮，仅当用户上翻离开底部时出现（`@scroll` 的 `scrollTop` 差值 + `@touchmove` 方向兜底，隐藏靠 `@scrolltolower`/发消息回底）；滚动采用「先清空再设置 `scrollInto`」以强制触发
 - 侧边滑块：聊天记录 >15 条时出现，按住滑块按比例定位到对应消息（scroll-into-view 到 `msg-N` 锚点）
-- 场景编辑弹窗与历史弹窗、记忆页共用 mask/panel 样式
+- 场景编辑弹窗与历史弹窗、记忆页共用 mask/panel 样式（各弹窗组件内各自携带 scoped 副本）
 
 ## 开发约定
 
@@ -116,6 +139,7 @@
 - **H5 兼容**：所有存储/图片逻辑需在 H5 可用（storage.js 已内置降级，新增功能注意遵循）
 - **UI 规范**：rpx 单位，主色 `#5b7cfa`，Options API，列表页复制数组（`slice()`）避免污染存储引用
 - **记忆改动必测**：修改 memory.js / chat.js 后运行 `npm test`，并同步更新 `scripts/test-memory.mjs` 断言
+- **表情改动必测**：修改 emojis.js 后运行 `npm test`，并同步更新 `scripts/test-emojis.mjs` 断言（名称校验/CRUD/解析拆分/占位提取/重排）
 
 ## 已知平台差异
 

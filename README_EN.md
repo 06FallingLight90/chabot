@@ -46,14 +46,20 @@ See [CLAUDE.md](CLAUDE.md) for details.
 ├── App.vue                # Storage init + memory maintenance on launch
 ├── pages.json             # Page registration + tabBar (Chat / Memory / Settings)
 ├── pages/
-│   ├── chat/chat.vue      # Chat page (history / new chat / persona / scene / export / compress)
+│   ├── chat/
+│   │   ├── chat.vue          # Chat page skeleton (holds session state, coordinates children)
+│   │   └── components/       # header / msg-list / input-bar / emoji-panel / scene-edit / history / persona
 │   ├── memory/memory.vue  # Memory page (filter / create / edit / multi-select delete)
 │   └── settings/settings.vue  # Settings (API / presets / thinking mode / persona / background / logs)
 ├── utils/
 │   ├── storage.js         # Cross-platform persistence (conversations / scenes / API presets / bg image)
 │   ├── memory.js          # Memory core (L1/L2/L3, dedup, layered retrieval, maintenance)
 │   ├── prompts.js         # System prompt builder + persona / provider presets
-│   ├── chat.js            # Chat orchestration (conversation mgmt / context compression / memory singleton)
+│   ├── chat.js            # Chat orchestration facade + send pipeline (single public entry)
+│   ├── chat-state.js      # Shared chat state (memoryStore singleton / last request cache)
+│   ├── chat-settings.js   # Settings domain (global defaults + per-conversation snapshot)
+│   ├── chat-conversations.js # Conversation domain (create/switch/delete/copy + history)
+│   ├── chat-compress.js   # Context compression domain
 │   ├── llm.js             # OpenAI-compatible LLM client (streaming & thinking control, logging)
 │   ├── log.js             # Debug log ring buffer
 │   └── export.js          # Chat export
