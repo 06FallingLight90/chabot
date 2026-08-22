@@ -79,11 +79,11 @@ const map = getEmojiMap()
 let segs = splitEmojiText('你好 $大狗开心$ 很高兴认识你', map)
 assert(
 	segs.length === 3 &&
-		segs[0].text === '你好 ' &&
+		segs[0].text === '你好' &&
 		segs[1].type === 'emoji' &&
 		segs[1].src === 'src://dog' &&
-		segs[2].text === ' 很高兴认识你',
-	'文本-表情-文本拆为 3 段'
+		segs[2].text === '很高兴认识你',
+	'文本-表情-文本拆为 3 段（文本去除表情侧空白）'
 )
 segs = splitEmojiText('$猫猫无语$', map)
 assert(segs.length === 1 && segs[0].type === 'emoji', '纯表情单段')
@@ -98,6 +98,17 @@ segs = splitEmojiText('', map)
 assert(segs.length === 0, '空串拆分为 0 段')
 segs = splitEmojiText('$大狗开心$$猫猫无语$', map)
 assert(segs.length === 2 && segs[0].type === 'emoji' && segs[1].type === 'emoji', '连续两个表情拆为 2 段')
+segs = splitEmojiText('$大狗开心$ $猫猫无语$', map)
+assert(segs.length === 2 && segs[0].type === 'emoji' && segs[1].type === 'emoji', '表情间空格跳过，不产生空气泡')
+segs = splitEmojiText('$大狗开心$\n\n$猫猫无语$', map)
+assert(segs.length === 2 && segs[0].type === 'emoji' && segs[1].type === 'emoji', '表情间换行跳过，不产生空气泡')
+segs = splitEmojiText('  $大狗开心$   ', map)
+assert(segs.length === 1 && segs[0].type === 'emoji', '表情首尾空白跳过')
+segs = splitEmojiText('唔~学长好乖…… $大狗开心$\n\n$猫猫无语$', map)
+assert(
+	segs.length === 3 && segs[0].text === '唔~学长好乖……' && segs[1].type === 'emoji' && segs[2].type === 'emoji',
+	'文本+多个表情混合：文本段正确且空白不产生空气泡'
+)
 
 console.log('\n[6] 占位名提取（LLM 回复校验）')
 assert(extractEmojiNames('好的 $大狗开心$').join(',') === '大狗开心', '提取已知占位')

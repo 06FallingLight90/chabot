@@ -116,8 +116,8 @@
 
 - **存储**：`chabot_emojis` 全局数组 `{id, name, src, created_at}`，**不随会话切换**；数量上限 `EMOJI_MAX_COUNT=50`
 - **表情名**：上传时必填、≤20 字、全局唯一、不含 `$`/换行（`validateEmojiName` 统一校验）；消息中用 `$表情名$` 占位引用
-- **图片持久化**：App/小程序 `uni.saveFile` 持久化路径；H5 canvas 压缩为小尺寸 PNG base64（限宽 300px、单图 ≤300KB）防 localStorage 配额打满（`_h5EmojiToBase64`）
-- **解析与校验**：`splitEmojiText(content, map)` 纯函数把消息拆为文本段/表情段（清单外的未知 `$名$` 原样保留为文本，供消息分条渲染）；`extractEmojiNames` 提取占位名供 LLM 回复校验
+- **图片持久化**：App/小程序上传时先 `uni.compressImage` 压缩（`compressedWidth: 300`，quality 80）再 `uni.saveFile`，避免原图过大拖慢消息列表渲染（compressImage 输出为 jpg，PNG 透明底会变白，属可接受权衡）；H5 canvas 压缩为小尺寸 PNG base64（限宽 300px、单图 ≤300KB）防 localStorage 配额打满（`_h5EmojiToBase64`）
+- **解析与校验**：`splitEmojiText(content, map)` 纯函数把消息拆为文本段/表情段——**跳过表情包前后的空格/换行等纯空白段并裁剪文本段首尾空白**，避免模型在表情间插入空白时渲染出空消息气泡；清单外的未知 `$名$` 原样保留为文本；`extractEmojiNames` 提取占位名供 LLM 回复校验
 - **管理**：`pages/emoji/emoji.vue`——批量上传（`uni.chooseImage count:9`，选图后**逐张命名**，弹窗显示进度与预览）、改名、删除（顺带清理已存图片文件）；`reorderEmojis(orderedIds)` 拖拽重排（未知 id 忽略、遗漏项自动补位）
 - **聊天页交互**：输入框右侧「表情」按钮展开表情栏（常驻渲染 + `max-height`/`opacity` 过渡动画）；**短按**点击插入 `$表情名$`、**滑动**滚动面板、**长按 2 秒**进入拖动排序（被拖项 `scale(1.1)` 放大 `fixed` 跟随手指，`touchmove` 按格子位置实时重排——`splice` 移除后插入实现"其后顺延一位"，松手 `reorderEmojis` 持久化，拖拽结束抑制一次 tap 防误发送）；点击消息区 / 唤起键盘自动收起表情栏
 - **键盘适配**：App 端聊天页 `pages.json` 配置 `softinputMode: adjustResize`（键盘弹出压缩视口）；表情栏打开时唤起键盘，先不关闭表情栏、等 `uni.onKeyboardHeightChange` 上报键盘高度（视口已压缩）后再关闭，输入栏直接从"表情栏上方"落到"键盘上方"；表情栏/键盘升起后消息列表滚动对齐底部（H5 靠 `window.resize`）
@@ -127,6 +127,7 @@
 ### 聊天页 UI
 
 - **组件化**：聊天页拆为页面骨架 + 7 个子组件（`pages/chat/components/`）——header（头部+情景条）/ msg-list（消息列表+侧边滑块+回到底部）/ input-bar / emoji-panel（表情栏+拖拽+上传弹窗）/ scene-edit / history / persona。页面持有会话状态（messages/scene/loading/input 等），子组件通过 props 下发 + `$emit` 上报，`msg-list` 的滚动/滑块内部自治并经 `ref` 暴露 `scrollBottom()`/`resetScrollState()`
+- **消息列表渲染性能**（表情多时 App 启动/滚动卡顿的针对性优化）：`msg-list` 启动时仅渲染最近 `visibleCount=150` 条（`visibleMessages` 窗口，新消息自动落在窗内）；上翻到顶部且还有更早消息时出现「加载更早消息」按钮，点击每次再加载 150 条（不做自动加载）；`v-for` 行使用**稳定 key**（`msgId + 段序号`），新增消息时上方已有行精确复用、不重复 patch，避免大量历史表情图被成批重渲染
 - 背景图固定于 scroll-view 可视区（cover 铺满，不随内容拉伸/滚动）
 - 头部「人格名（点击设置）/ 历史 / 新对话 / 清空」：人格名点击弹出「当前对话人格」设置（预置 4 款 + 自定义提示词，保存写入会话快照）；历史弹窗切换/删除会话、压缩上文、**导出对话为 .txt**（`utils/export.js`：H5 Blob 下载带 BOM、App plus.io 写 `_doc` 并尝试系统打开、小程序复制全文降级）
 - **一键回到底部**：右下角浮动按钮，仅当用户上翻离开底部时出现（`@scroll` 的 `scrollTop` 差值 + `@touchmove` 方向兜底，隐藏靠 `@scrolltolower`/发消息回底）；滚动采用「先清空再设置 `scrollInto`」以强制触发

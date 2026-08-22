@@ -12,11 +12,19 @@
 			@touchmove="onMsgTouchMove"
 		>
 			<view class="msg-inner">
+				<!-- 上翻到顶部且还有更早消息：点击才加载（默认视为已到最早） -->
+				<view v-if="showLoadEarlier" class="load-earlier" @tap="loadMoreEarlier">加载更早消息</view>
 				<view v-if="!messages.length" class="empty">
 					<view class="empty-name">{{ personaName }}</view>
 					<view class="empty-tip">打个招呼，开始聊天吧～</view>
 				</view>
-				<view v-for="(r, i) in displayRows" :key="i" :id="'msg-' + i" class="msg-row" :class="r.role">
+				<view
+					v-for="(r, i) in displayRows"
+					:key="r.msgId + '_' + r.segNo"
+					:id="'msg-' + i"
+					class="msg-row"
+					:class="r.role"
+				>
 					<view v-if="r.type === 'text'" class="bubble">{{ r.text }}</view>
 					<image v-else class="bubble-emoji" :src="r.src" mode="aspectFit" />
 				</view>
@@ -69,9 +77,11 @@
 		data() {
 			return {
 				showJumpBottom: false,
+				showLoadEarlier: false, // 上翻到顶部且还有更早消息时显示"加载更早"按钮
 				_lastScrollTop: 0, // 上翻检测基线（非模板字段）
 				_touchY: null,     // 触摸上翻检测（非模板字段）
 				scrollInto: '',
+				visibleCount: 150, // 启动时仅渲染最近 N 条；点击"加载更早"按钮再往前渲染
 				dragRatio: 1,     // 滑块位置比例（0=顶部 1=底部），松手后保留
 				dragTip: '',
 				sliderRect: null
@@ -97,14 +107,20 @@
 				const h = Math.max(0, this.sliderRect.height - THUMB_H)
 				return (this.dragRatio * h).toFixed(1) + 'px'
 			},
-			// 把每条消息按 $表情名$ 拆分为段行（文本段 → 气泡，表情段 → 图片），分条展示
+			// 启动只渲染最近 visibleCount 条，新消息自动落在窗口内
+			visibleMessages() {
+				return this.messages.length > this.visibleCount ? this.messages.slice(-this.visibleCount) : this.messages
+			},
+			// 把每条消息按 $表情名$ 拆分为段行（文本段 → 气泡，表情段 → 图片），分条展示；
+			// 行携带 msgId+segNo 作为稳定 key，新增消息时上方已有行精确复用、不重复 patch
 			displayRows() {
 				const map = {}
 				for (const e of this.emojis) map[e.name] = e.src
 				const rows = []
-				for (const m of this.messages) {
+				for (const m of this.visibleMessages) {
+					let segNo = 0
 					for (const seg of splitEmojiText(m.content, map)) {
-						rows.push({ role: m.role, ...seg })
+						rows.push({ role: m.role, msgId: m.id, segNo: segNo++, ...seg })
 					}
 				}
 				return rows
@@ -141,9 +157,16 @@
 					this.showJumpBottom = true
 				}
 				this._lastScrollTop = st
+				// 接近顶部且还有更早消息：显示"加载更早消息"按钮（点击才加载）
+				this.showLoadEarlier = st < 50 && this.visibleCount < this.messages.length
 			},
 			onMsgScrollToLower() {
 				this.showJumpBottom = false
+			},
+			/** 点击"加载更早消息"：每次再渲染更早的 150 条 */
+			loadMoreEarlier() {
+				if (this.visibleCount >= this.messages.length) return
+				this.visibleCount = Math.min(this.messages.length, this.visibleCount + 150)
 			},
 			// 触摸兜底：手指下移（内容上移）＝正在上翻看历史；仅长对话启用避免误触
 			onMsgTouchStart(e) {
@@ -201,6 +224,14 @@
 	.msg-inner {
 		padding: 20rpx 30rpx;
 		box-sizing: border-box;
+	}
+
+	/* 顶部"加载更早消息"按钮 */
+	.load-earlier {
+		padding: 16rpx 0 24rpx;
+		text-align: center;
+		font-size: 24rpx;
+		color: #5b7cfa;
 	}
 
 	.empty {

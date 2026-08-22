@@ -102,10 +102,24 @@ export function addEmojiData(name, src) {
 	return { ...item }
 }
 
-/** 保存表情图片为持久化 src（App/小程序存文件，H5 转小尺寸 PNG base64），失败返回空串 */
+/** 保存表情图片为持久化 src（App/小程序压缩后存文件，H5 转小尺寸 PNG base64），失败返回空串 */
 async function _saveEmojiImage(tempPath) {
 	let saved = ''
 	// #ifdef APP-PLUS || MP-WEIXIN
+	// 上传时先压缩（限宽 + quality），避免原图过大：消息列表渲染大量大图会明显拖慢 App 启动与滚动
+	// 注意：compressImage 输出为 jpg，PNG 透明底会变白，表情多为此可接受；H5 端仍走 PNG base64 保留透明
+	if (typeof uni.compressImage === 'function') {
+		const compressed = await new Promise((resolve) => {
+			uni.compressImage({
+				src: tempPath,
+				quality: 80,
+				compressedWidth: EMOJI_IMG_MAX_WIDTH,
+				success: (res) => resolve(res.tempFilePath || ''),
+				fail: () => resolve('')
+			})
+		})
+		if (compressed) tempPath = compressed
+	}
 	saved = await new Promise((resolve) => {
 		uni.saveFile({
 			tempFilePath: tempPath,
@@ -228,6 +242,8 @@ export function extractEmojiNames(text) {
 
 /**
  * 把消息文本按 $表情名$ 拆分为段数组（纯函数，供消息渲染与测试）。
+ * 表情包前后的空格/换行等纯空白段会被跳过，文本段去除首尾空白——
+ * 避免模型在表情之间插入空格/换行时渲染出空消息气泡。
  * @param {string} content 原始消息（可含 $名$ 占位）
  * @param {Object} [map] 表情名 → 图片（getEmojiMap() 的结果）
  * @returns {Array<{type:'text', text:string}|{type:'emoji', name:string, src:string}>}
@@ -241,11 +257,17 @@ export function splitEmojiText(content, map) {
 	let m
 	while ((m = re.exec(text)) !== null) {
 		const name = m[1]
-		if (last < m.index) out.push({ type: 'text', text: text.slice(last, m.index) })
+		const seg = text.slice(last, m.index)
+		// 表情前的文本段：纯空白跳过，非空白去除首尾空白
+		const trimmed = seg.trim()
+		if (trimmed) out.push({ type: 'text', text: trimmed })
 		const src = map && map[name]
 		out.push(src ? { type: 'emoji', name, src } : { type: 'text', text: m[0] })
 		last = re.lastIndex
 	}
-	if (last < text.length) out.push({ type: 'text', text: text.slice(last) })
+	if (last < text.length) {
+		const trimmed = text.slice(last).trim()
+		if (trimmed) out.push({ type: 'text', text: trimmed })
+	}
 	return out
 }
