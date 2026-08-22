@@ -57,6 +57,7 @@
 	} from '../../utils/chat.js'
 	import { getBackgroundImage, getScene, setScene } from '../../utils/storage.js'
 	import { getEmojis } from '../../utils/emojis.js'
+	import { speakText, stopSpeaking } from '../../utils/tts.js'
 	import ChatHeader from './components/chat-header.vue'
 	import ChatMsgList from './components/chat-msg-list.vue'
 	import ChatInputBar from './components/chat-input-bar.vue'
@@ -121,6 +122,7 @@
 		},
 		onUnload() {
 			this._unloaded = true
+			stopSpeaking()
 			// #ifdef MP-WEIXIN
 			if (uni.offKeyboardHeightChange) uni.offKeyboardHeightChange(this.onKbChange)
 			// #endif
@@ -204,6 +206,7 @@
 				if (!text || this.loading) return
 				this.input = ''
 				this.showEmojiPanel = false
+				stopSpeaking() // 用户发送新消息时打断上一段语音
 				this.messages.push({ role: 'user', content: text })
 				this.loading = true
 				this.scrollBottom()
@@ -212,6 +215,7 @@
 						this.messages.push({ role: 'assistant', content: reply })
 						this.scene = getScene() // LLM 可能更新了当前情景
 						if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
+						this.speakReply(reply)
 					})
 					.catch((e) => {
 						this.messages.push({
@@ -224,8 +228,16 @@
 						this.scrollBottom()
 					})
 			},
+			// 语音阅读：LLM 新回复渲染时同步合成语音播放（错误提示不朗读；仅当开启且已配置 TTS Key 时生效）
+			speakReply(reply) {
+				if (!reply || /^\s*⚠️/.test(reply)) return
+				const s = getConversationSettings()
+				if (!s.ttsEnabled || !s.ttsApiKey) return
+				speakText(reply, { apiKey: s.ttsApiKey, model: s.ttsModel, voice: s.ttsVoice })
+			},
 			doRegenerate() {
 				if (this.loading) return
+				stopSpeaking() // 重新生成前打断上一段语音
 				const lastUser = popLastAssistant()
 				if (!lastUser) return
 				// 移除本地展示中的最后一条助手消息，然后静默重发上一条用户消息
@@ -239,6 +251,7 @@
 						this.messages.push({ role: 'assistant', content: reply })
 						this.scene = getScene()
 						if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
+						this.speakReply(reply)
 					})
 					.catch((e) => {
 						this.messages.push({
@@ -257,6 +270,7 @@
 					content: '确定清空当前聊天记录吗？（记忆不会清除）',
 					success: (res) => {
 						if (res.confirm) {
+							stopSpeaking()
 							clearConversation()
 							this.messages = []
 						}
@@ -266,6 +280,7 @@
 			// ---- 会话历史 / 新对话（历史弹窗内操作由 chat-history 组件处理，完成后 emit changed） ----
 			newChat() {
 				if (this.loading) return
+				stopSpeaking()
 				startNewConversation()
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
@@ -280,6 +295,7 @@
 			},
 			// 历史弹窗里切换/删除/复制会话后：重载当前会话展示
 			onHistoryChanged() {
+				stopSpeaking()
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
 				this.refreshHeader()

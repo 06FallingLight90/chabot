@@ -13,6 +13,7 @@ A lightweight LLM persona chat app built with **uni-app (Vue 3)**. **No backend,
 - **API profiles**: up to **3 saved API presets** for quick switching; a **Thinking Mode** toggle fixes "empty reply" issues with Ollama reasoning models such as Qwen3 (`reasoning_effort`)
 - **Memory management**: filter / create / edit content, priority & level / **multi-select batch delete**
 - **Export chat**: one-tap export of the current conversation to `.txt` (download on H5, save to app documents on App, copy to clipboard on Mini Program)
+- **Message voice reading (TTS)**: optional; new LLM replies are synthesized and played automatically on render (Qwen-TTS by default; API key / model / voice configurable). Only text is read — emoji placeholders are skipped; audio is never saved to disk and is destroyed after one playback; a one-tap interface test is available in Settings
 - **Chat UX**: chat background image, jump-to-bottom button, side slider for quick scrolling, regenerate last AI reply
 
 ## 🛠 Tech Stack
@@ -61,6 +62,7 @@ See [CLAUDE.md](CLAUDE.md) for details.
 │   ├── chat-conversations.js # Conversation domain (create/switch/delete/copy + history)
 │   ├── chat-compress.js   # Context compression domain
 │   ├── llm.js             # OpenAI-compatible LLM client (streaming & thinking control, logging)
+│   ├── tts.js             # TTS voice reading (Qwen-TTS synthesis + playback + interface test)
 │   ├── log.js             # Debug log ring buffer
 │   └── export.js          # Chat export
 └── scripts/test-memory.mjs  # Core logic assertions (npm test)
@@ -81,5 +83,5 @@ Runs in Node with a mocked `uni` store, covering memory parsing, dedup & merge, 
 
 ## ⚠️ Platform Notes
 
-- WeChat Mini Program requires configuring **request legal domains** in the MP admin console (App works as long as it's online)
+- WeChat Mini Program requires configuring **request legal domains** in the MP admin console (App works as long as it's online); when voice reading is enabled, also add the TTS API domain (e.g. `dashscope.aliyuncs.com`) to the legal domains
 - All data stays on your device; no cloud sync

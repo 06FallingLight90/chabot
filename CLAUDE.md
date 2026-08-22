@@ -29,13 +29,14 @@
 │   │   └── components/       # 聊天页子组件：header / msg-list / input-bar / emoji-panel / scene-edit / history / persona
 │   ├── memory/memory.vue  # 记忆页（筛选/新建/编辑内容/优先级/级别/多选删除）
 │   ├── emoji/emoji.vue    # 表情管理页（批量上传逐张命名/改名/删除）
-│   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/请求次数/人格/聊天表情包/聊天背景/上下文压缩/数据管理/调试日志）
+│   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/请求次数/人格/聊天表情包/语音阅读/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
 │   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
 │   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 表情包引导 + 自定义示例 + 接口预设
 │   ├── emojis.js          # 表情包数据层（全局列表、名称校验、跨端图片持久化、$名$ 解析、拖拽重排）
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，stream:false + reasoning_effort 思考控制）
+│   ├── tts.js             # TTS 语音阅读（Qwen-TTS 合成 + 播放 + 接口测试，表情不朗读/不落盘）
 │   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
 │   ├── export.js          # 聊天记录导出（H5 下载 / App 写文档目录 / 小程序复制降级）
 │   ├── chat.js            # 聊天服务门面 + 发送主链路（统一对外导出，各调用方/测试入口不变）
@@ -100,7 +101,7 @@
 ### 调试日志（utils/log.js）
 
 - 环形缓冲 200 条（`MAX_LOGS`），单条详情上限 30000 字符（`MAX_DETAIL_CHARS`）防存储膨胀；`addLog(type, msg, detail)`，type：`req`/`res`/`err`/`info`
-- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作（会话域在 `chat-conversations.js`）；`chat-compress.js` 压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）、保存/删除 API 预设
+- **埋点**：`llm.js` 每次请求（完整 messages JSON）/响应（完整返回内容）/错误；`chat.js` 发送消息、记忆入库、情景更新、会话操作（会话域在 `chat-conversations.js`）；`chat-compress.js` 压缩执行（详情附**完整压缩后上文**）；`settings.vue` 保存设置（不含 API Key）、保存/删除 API 预设；`tts.js` TTS 合成/播放/接口测试
 - **设置页调试面板**：类型徽章（请求蓝/响应绿/错误红/信息灰）+ 摘要 + 时间，点击条目展开完整详情（收起态 JS 截断前 200 字符预览，不用 CSS line-clamp，兼容性可靠）；支持刷新与一键清空
 
 ### 当前情景（Scene）
@@ -123,6 +124,17 @@
 - **键盘适配**：App 端聊天页 `pages.json` 配置 `softinputMode: adjustResize`（键盘弹出压缩视口）；表情栏打开时唤起键盘，先不关闭表情栏、等 `uni.onKeyboardHeightChange` 上报键盘高度（视口已压缩）后再关闭，输入栏直接从"表情栏上方"落到"键盘上方"；表情栏/键盘升起后消息列表滚动对齐底部（H5 靠 `window.resize`）
 - **LLM 互动**：`sendMessage` 把表情清单注入 system（`prompts.js` 的 `EMOJI_GUIDE`，无表情/`emojiEnabled=false` 时不注入）；`parseAndValidateReply` 校验回复中 `$名$` 必须存在于清单，否则判定格式不合格自动重试
 - **设置项**：`emojiEnabled`（settings.vue「聊天表情包」，随会话快照存储，默认开启），关闭后请求不携带清单，LLM 不会主动使用表情（手动插入与渲染不受影响）
+
+### 语音阅读 TTS（utils/tts.js + 聊天页/设置页）
+
+- **接口**：默认对接 **Qwen-TTS 非实时语音合成**——`POST https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`，请求体 `{ model, input: { text, voice } }`（model 默认 `qwen3-tts-flash`，voice 默认 `Cherry`），非流式响应取 `output.audio.url`（音频直链，有效期 24h）
+- **设置项**（随会话快照存储，同其余设置）：`ttsEnabled`（默认关）/ `ttsApiKey` / `ttsModel` / `ttsVoice`；设置页「语音阅读」区块可开关、填 Key、改模型，音色支持从内置清单选择（`TTS_VOICES`，35 个 Qwen 官方常用音色含方言，未收录的自定义音色可手动输入）或手动输入
+- **触发**：聊天页 `send`/`doRegenerate` 的 LLM 回复落库渲染后调用 `speakText(reply, ...)`——**只朗读新返回的助手消息**；`⚠️` 开头的错误提示不朗读；未开启或未填 Key 直接跳过；发送新消息/重新生成/清空/切换会话/页面卸载时 `stopSpeaking()` 打断
+- **表情不朗读**：`textForSpeech` 复用 `splitEmojiText(content, getEmojiMap())` 只保留文本段拼接，`$表情名$` 占位不朗读（清单外未知 `$名$` 与渲染一致保留为文本）；文本截断到 `TTS_MAX_CHARS=500` 防超接口上限
+- **不落盘**：拿到 URL 后由 `InnerAudioContext` 直接播远程音频，**不下载/不落文件**；`_play` 注册 `onEnded`/`onStop`/`onError`，播放完（或出错）即 `destroy()` 销毁播放器；模块级 `_ctx` 保证**同一时刻只播一条**（新播放前 `_stopCtx`）
+- **并发/竞态**：模块级 `_seq` 序号——`speakText` 先 `stopSpeaking()` 作废旧的在途合成请求再领取新序号，合成响应返回时若 `seq !== _seq`（期间用户又发消息/停止/切页）则放弃创建播放器
+- **接口测试**：设置页「测试语音接口」按钮调用 `testTts({apiKey, model, voice})`，以当前配置发送固定短文本 `TTS_TEST_TEXT` 并尝试播放，返回 `{ok, message}`；测试全程写日志（`TTS 接口测试` info / `TTS 合成失败`·`TTS 网络错误`·`TTS 播放失败` err / `TTS 接口测试成功` res），设置页测试后自动刷新调试日志面板
+- **平台坑**：`InnerAudioContext.obeyMuteSwitch` 仅微信小程序可写，**App/H5 端是只读 getter**（赋值即抛错并中断后续 `src`/`play()`，曾导致 App 无声）——赋值必须包 try/catch；微信小程序开启语音阅读需把 TTS 接口域名加入 request 合法域名
 
 ### 聊天页 UI
 
@@ -150,6 +162,7 @@
 | 图片压缩 | uni.compressImage | canvas 压缩 | uni.compressImage |
 | 图片持久化 | uni.saveFile | base64 | uni.saveFile |
 | LLM 请求 | uni.request | uni.request | uni.request（需配置合法域名） |
+| TTS 播放 | InnerAudioContext | InnerAudioContext | InnerAudioContext（obeyMuteSwitch 可写；需配置合法域名） |
 
 ## Ollama 本地模型接入
 

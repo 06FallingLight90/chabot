@@ -157,6 +157,45 @@
 			</view>
 		</view>
 
+		<view class="section">
+			<view class="sec-title">语音阅读</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">TTS 语音阅读</text>
+					<view class="mode-btns">
+						<view class="mode-btn" :class="{ on: s.ttsEnabled }" @tap="s.ttsEnabled = true">开启</view>
+						<view class="mode-btn" :class="{ on: !s.ttsEnabled }" @tap="s.ttsEnabled = false">关闭</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">
+					开启后，LLM 新返回的消息在渲染时自动合成语音播放；表情包不朗读，仅朗读文字；语音不落盘，仅播放一次。默认以 Qwen-TTS 为例。
+				</view>
+			</view>
+			<view class="field">
+				<text class="label">TTS API Key</text>
+				<input class="input" v-model="s.ttsApiKey" password placeholder="sk-…" />
+			</view>
+			<view class="field">
+				<text class="label">TTS 模型</text>
+				<input class="input" v-model="s.ttsModel" placeholder="qwen3-tts-flash" />
+			</view>
+			<view class="field">
+				<text class="label">音色</text>
+				<view class="voice-row">
+					<input class="input voice-input" v-model="s.ttsVoice" placeholder="Cherry" />
+					<picker mode="selector" :range="ttsVoiceNames" @change="onTtsVoiceChange">
+						<view class="voice-pick-btn">从列表选择</view>
+					</picker>
+				</view>
+				<view v-if="ttsVoiceHint" class="time-mode-hint">{{ ttsVoiceHint }}</view>
+				<view class="time-mode-hint">可手动输入官方列表外的自定义音色（如声音复刻产物）。完整音色列表参考官方文档。</view>
+			</view>
+			<view class="field">
+				<view class="tts-test-btn" @tap="doTestTts">测试语音接口</view>
+				<view class="time-mode-hint">点击后按上方当前配置（Key/模型/音色）发送一小段测试文本并尝试播放，请求/响应/错误会记录到下方调试日志。</view>
+			</view>
+		</view>
+
 		<button class="save-btn" @tap="save">保存设置</button>
 
 		<view class="section">
@@ -213,6 +252,7 @@
 	import { PERSONALITIES, PROVIDERS, CUSTOM_PROMPT_SAMPLE } from '../../utils/prompts.js'
 	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage, getApiProfiles, saveApiProfile, deleteApiProfile } from '../../utils/storage.js'
 	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
+	import { TTS_VOICE_NAMES, ttsVoiceDesc, testTts as runTtsTest } from '../../utils/tts.js'
 
 	const TYPE_NAMES = { req: '请求', res: '响应', err: '错误', info: '信息' }
 
@@ -236,7 +276,8 @@
 					{ label: '40条', value: 40 },
 					{ label: '60条', value: 60 },
 					{ label: '80条', value: 80 }
-				]
+				],
+				ttsVoiceNames: TTS_VOICE_NAMES
 			}
 		},
 		computed: {
@@ -255,6 +296,11 @@
 				const slots = []
 				for (let i = 0; i < 3; i++) slots.push(this.presets[i] || null)
 				return slots
+			},
+			// 当前音色的说明文案（未收录的自定义音色不显示）
+			ttsVoiceHint() {
+				const desc = ttsVoiceDesc(this.s.ttsVoice)
+				return desc ? '「' + this.s.ttsVoice + '」' + desc : ''
 			}
 		},
 		onShow() {
@@ -380,6 +426,27 @@
 			onTemp(e) {
 				this.s.temperature = e.detail.value
 			},
+			onTtsVoiceChange(e) {
+				this.s.ttsVoice = this.ttsVoiceNames[e.detail.value]
+			},
+			// 测试 TTS 接口：按当前表单配置发一小段测试请求并尝试播放，结果写入调试日志
+			async doTestTts() {
+				if (!this.s.ttsApiKey.trim()) {
+					uni.showToast({ title: '请先填写 TTS API Key', icon: 'none' })
+					return
+				}
+				uni.showLoading({ title: '测试中' })
+				let res = { ok: false, message: '测试失败' }
+				try {
+					res = await runTtsTest({ apiKey: this.s.ttsApiKey, model: this.s.ttsModel, voice: this.s.ttsVoice })
+				} catch (e) {
+					res = { ok: false, message: (e && e.message) || '测试失败' }
+				} finally {
+					uni.hideLoading()
+				}
+				this.logs = getLogs() // 刷新调试日志，立即展示本次测试的请求/响应/错误记录
+				uni.showToast({ title: res.message, icon: res.ok ? 'success' : 'none' })
+			},
 			save() {
 				if (!this.s.apiKey.trim()) {
 					uni.showToast({ title: '请填写 API Key', icon: 'none' })
@@ -390,7 +457,7 @@
 				addLog(
 					'info',
 					'保存设置',
-					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval} · 最大请求次数=${this.s.maxRequestAttempts}`
+					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval} · 最大请求次数=${this.s.maxRequestAttempts} · 语音阅读=${this.s.ttsEnabled ? '开(' + (this.s.ttsModel || '') + '/' + (this.s.ttsVoice || '') + ')' : '关'}`
 				)
 				uni.showToast({ title: '已保存', icon: 'success' })
 			},
@@ -637,6 +704,38 @@
 		border-radius: 12rpx;
 		padding: 0 24rpx;
 		font-size: 28rpx;
+	}
+
+	.voice-row {
+		display: flex;
+		align-items: center;
+	}
+
+	.voice-input {
+		flex: 1;
+		min-width: 0;
+		margin-right: 16rpx;
+	}
+
+	.voice-pick-btn {
+		flex-shrink: 0;
+		height: 80rpx;
+		line-height: 80rpx;
+		padding: 0 28rpx;
+		font-size: 26rpx;
+		color: #5b7cfa;
+		background: #eef1fe;
+		border-radius: 12rpx;
+	}
+
+	.tts-test-btn {
+		height: 80rpx;
+		line-height: 80rpx;
+		text-align: center;
+		font-size: 28rpx;
+		color: #fff;
+		background: #5b7cfa;
+		border-radius: 12rpx;
 	}
 
 	.persona {

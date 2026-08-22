@@ -32,6 +32,11 @@ export function getSettings() {
 		compressInterval: parseInt(getSetting('compressInterval', '0'), 10) || 0, // 自动压缩间隔（条），0=关闭
 		maxRequestAttempts: parseInt(getSetting('maxRequestAttempts', '5'), 10) || 5, // 回复格式不合格时的最大请求次数（重试上限）
 		emojiEnabled: getSetting('emojiEnabled', true) !== false, // 聊天表情包开关：关闭后请求不携带表情清单
+		// 语音阅读（TTS）：默认关闭；开启后 LLM 新回复会自动合成语音播放
+		ttsEnabled: getSetting('ttsEnabled', false) !== false,
+		ttsApiKey: getSetting('ttsApiKey', ''),
+		ttsModel: getSetting('ttsModel', 'qwen3-tts-flash'),
+		ttsVoice: getSetting('ttsVoice', 'Cherry'),
 		personaName: getPersonaName(personalityId)
 	}
 }
@@ -49,7 +54,11 @@ export function normalizeSettings(s) {
 		timeMode: s && s.timeMode === 'virtual' ? 'virtual' : 'real',
 		compressInterval: parseInt(s && s.compressInterval, 10) || 0,
 		maxRequestAttempts: Math.max(1, Math.min(20, parseInt(s && s.maxRequestAttempts, 10) || 5)),
-		emojiEnabled: !s || s.emojiEnabled !== false
+		emojiEnabled: !s || s.emojiEnabled !== false,
+		ttsEnabled: !s || s.ttsEnabled !== false,
+		ttsApiKey: String(s && s.ttsApiKey ? s.ttsApiKey : '').trim(),
+		ttsModel: String(s && s.ttsModel ? s.ttsModel : '').trim() || 'qwen3-tts-flash',
+		ttsVoice: String(s && s.ttsVoice ? s.ttsVoice : '').trim() || 'Cherry'
 	}
 }
 
@@ -70,6 +79,7 @@ export function getConversationSettings() {
 		merged.temperature = Number.isFinite(parseFloat(raw.temperature)) ? parseFloat(raw.temperature) : s.temperature
 		merged.compressInterval = parseInt(raw.compressInterval, 10) || 0
 		merged.maxRequestAttempts = Math.max(1, Math.min(20, parseInt(raw.maxRequestAttempts, 10) || 5))
+		merged.ttsEnabled = raw.ttsEnabled === undefined ? s.ttsEnabled : raw.ttsEnabled !== false
 		merged.personaName = getPersonaName(merged.personalityId || s.personalityId)
 		return merged
 	}
