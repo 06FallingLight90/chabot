@@ -2,7 +2,7 @@
 
 一个基于 **uni-app (Vue 3)** 的轻量 LLM 人格聊天 App。**无后端、纯端侧**，调用任意 **OpenAI 兼容**的 `/chat/completions` 接口（支持 Ollama 本地模型），跨 **App / H5 / 微信小程序** 三端。
 
-核心记忆机制灵感来源：https://github.com/Koishi007/koishi-ai-pet。请支持该作者！
+核心记忆机制灵感来源：https://github.com/Koishi007/koishi-ai-pet 请支持该作者！
 
 ## ✨ 功能特性
 
