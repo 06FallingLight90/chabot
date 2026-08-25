@@ -21,6 +21,30 @@ const TTS_ENDPOINT = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multim
 const TTS_MAX_CHARS = 500 // Qwen-TTS 单次输入约 600 字符上限，留余量截断，避免长回复合成失败
 const TTS_TIMEOUT_MS = 60000
 
+/** HTML5 媒体错误码含义（uni InnerAudioContext onError 在 H5 端返回的 MediaError.code；App 端 uni 不暴露 code） */
+const MEDIA_ERRORS = {
+	1: '加载被中止（可能被系统打断）',
+	2: '网络错误（音频下载失败，多为瞬时网络波动）',
+	3: '解码失败（音频格式不受当前设备播放器支持）',
+	4: '音频源不支持（格式或地址无效）'
+}
+
+/** 解析播放错误详情：App 端 uni 只回传 errMsg='MediaError' 且不带 code，尽力抓取所有可用字段，无法识别则输出原始结构便于排查 */
+function _playErrorDetail(err) {
+	if (!err) return '未知错误'
+	const code = err.code !== undefined ? err.code : err.errorCode !== undefined ? err.errorCode : ''
+	const msg = err.errMsg || err.message || err.msg || ''
+	let raw = ''
+	try { raw = JSON.stringify(err) } catch (e) { /* 忽略 */ }
+	const parts = []
+	if (code !== '') parts.push(`code=${code}${MEDIA_ERRORS[code] ? '（' + MEDIA_ERRORS[code] + '）' : ''}`)
+	if (msg) parts.push(String(msg))
+	if (raw && raw !== '{}' && raw !== '""' && raw !== '"MediaError"' && raw.indexOf('"errMsg":"MediaError"') === -1) {
+		parts.push('raw=' + raw.slice(0, 200))
+	}
+	return parts.join(' · ') || String(err) || '未知错误'
+}
+
 /**
  * 常用音色清单（Qwen-TTS 官方音色节选，含部分方言音色；完整列表见官方文档链接）。
  * 未收录的自定义音色（如声音复刻/声音设计产物）可直接在设置里手动输入。
@@ -146,8 +170,9 @@ async function _synthesize({ apiKey, model, voice, text }) {
 	return url
 }
 
-/** 播放远程音频（不落地文件，播放一次即销毁）。同一时刻只保留一个播放器，播放失败返回 false */
-function _play(url, voice, preview) {
+/** 播放远程音频（不落地文件，播放一次即销毁）。同一时刻只保留一个播放器，播放失败返回 false。
+ *  onFail：播放器触发 onError 后调用（已清理播放器），供调用方决定是否重新合成重试 */
+function _play(url, voice, preview, onFail) {
 	if (typeof uni.createInnerAudioContext !== 'function') {
 		addLog('err', 'TTS 播放失败', '当前环境不支持 createInnerAudioContext')
 		return false
@@ -166,12 +191,29 @@ function _play(url, voice, preview) {
 	ctx.onEnded(cleanup)
 	ctx.onStop(cleanup)
 	ctx.onError((err) => {
-		addLog('err', 'TTS 播放失败', (err && err.errMsg) || '未知错误')
+		addLog('err', 'TTS 播放失败', _playErrorDetail(err))
 		cleanup()
+		if (typeof onFail === 'function') onFail()
 	})
 	_ctx = ctx
 	ctx.src = url
+	// #ifdef APP-PLUS
+	// App 原生播放器：src 刚设置时资源未就绪，立即 play() 可能被静默忽略（无报错、不触发 onError）。
+	// 改为等 onCanplay 就绪后再 play；若 onCanplay 未触发，1s 后兜底再 play 一次（play 幂等，重复调用无害）。
+	ctx.onCanplay(() => {
+		if (!ended && _ctx === ctx) {
+			try { ctx.play() } catch (e) { /* 忽略 */ }
+		}
+	})
+	setTimeout(() => {
+		if (!ended && _ctx === ctx) {
+			try { ctx.play() } catch (e) { /* 忽略 */ }
+		}
+	}, 1000)
+	// #endif
+	// #ifndef APP-PLUS
 	ctx.play()
+	// #endif
 	return true
 }
 
@@ -203,7 +245,17 @@ export async function testTts(opts = {}) {
 	const url = await _synthesize({ apiKey, model, voice, text: TTS_TEST_TEXT })
 	if (!url) return { ok: false, message: '合成失败，详情见调试日志' }
 	addLog('res', 'TTS 接口测试成功', `model=${model} · voice=${voice} · 开始播放测试语音`)
-	const ok = _play(url, voice, TTS_TEST_TEXT)
+	let retried = false
+	const ok = _play(url, voice, TTS_TEST_TEXT, async () => {
+		// App 端 uni 的 onError 只回传通用 MediaError（不带错误码），多为瞬时网络/解码问题，
+		// 重新合成一次（拿新 URL）自动重试
+		if (retried) return
+		retried = true
+		addLog('info', 'TTS 播放失败，重新合成重试', '首次播放失败（MediaError），重新合成一次并重试')
+		const retryUrl = await _synthesize({ apiKey, model, voice, text: TTS_TEST_TEXT })
+		if (!retryUrl) return
+		_play(retryUrl, voice, TTS_TEST_TEXT)
+	})
 	return ok
 		? { ok: true, message: '测试成功，正在播放语音…' }
 		: { ok: false, message: '当前环境不支持音频播放' }
@@ -234,5 +286,15 @@ export async function speakText(content, opts = {}) {
 	if (seq !== _seq) return
 
 	addLog('info', 'TTS 播放', `${voice} · ${_preview(text)}`)
-	_play(url, voice, text)
+	let retried = false
+	_play(url, voice, text, async () => {
+		// App 端 uni 的 onError 只回传通用 MediaError（不带错误码），多为瞬时网络/解码问题，
+		// 重新合成一次（拿新 URL）自动重试；期间用户已发新消息/停止则放弃
+		if (retried || seq !== _seq) return
+		retried = true
+		addLog('info', 'TTS 播放失败，重新合成重试', '首次播放失败（MediaError），重新合成一次并重试')
+		const retryUrl = await _synthesize({ apiKey, model, voice, text })
+		if (!retryUrl || seq !== _seq) return
+		_play(retryUrl, voice, text)
+	})
 }

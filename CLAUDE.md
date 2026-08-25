@@ -133,6 +133,7 @@
 - **表情不朗读**：`textForSpeech` 复用 `splitEmojiText(content, getEmojiMap())` 只保留文本段拼接，`$表情名$` 占位不朗读（清单外未知 `$名$` 与渲染一致保留为文本）；文本截断到 `TTS_MAX_CHARS=500` 防超接口上限
 - **不落盘**：拿到 URL 后由 `InnerAudioContext` 直接播远程音频，**不下载/不落文件**；`_play` 注册 `onEnded`/`onStop`/`onError`，播放完（或出错）即 `destroy()` 销毁播放器；模块级 `_ctx` 保证**同一时刻只播一条**（新播放前 `_stopCtx`）
 - **并发/竞态**：模块级 `_seq` 序号——`speakText` 先 `stopSpeaking()` 作废旧的在途合成请求再领取新序号，合成响应返回时若 `seq !== _seq`（期间用户又发消息/停止/切页）则放弃创建播放器
+- **App 播放适配**：App 原生播放器在 `src` 刚设置时资源未就绪，立即 `play()` 可能被静默忽略（无报错、不触发 `onError`）——App 端（`#ifdef APP-PLUS`）改为**等 `onCanplay` 就绪后再 play**，并 1s 兜底再 play 一次（play 幂等，重复调用无害）；H5/微信小程序仍为设置 src 后立即 play。同一时刻只保留一个播放器（`_ctx`），播放完/出错即 `destroy()`，不落盘。`onError` 尽力解析 MediaError 的 `code`/`errorCode`/`message` 及原始结构（**App 端 uni 不暴露 code，仅回传 errMsg='MediaError'**）；首次播放失败时 `speakText`/`testTts` 会**重新合成一次拿新 URL 自动重试**（兜住瞬时网络/解码问题）
 - **接口测试**：设置页「测试语音接口」按钮调用 `testTts({apiKey, model, voice})`，以当前配置发送固定短文本 `TTS_TEST_TEXT` 并尝试播放，返回 `{ok, message}`；测试全程写日志（`TTS 接口测试` info / `TTS 合成失败`·`TTS 网络错误`·`TTS 播放失败` err / `TTS 接口测试成功` res），设置页测试后自动刷新调试日志面板
 - **平台坑**：`InnerAudioContext.obeyMuteSwitch` 仅微信小程序可写，**App/H5 端是只读 getter**（赋值即抛错并中断后续 `src`/`play()`，曾导致 App 无声）——赋值必须包 try/catch；微信小程序开启语音阅读需把 TTS 接口域名加入 request 合法域名
 
