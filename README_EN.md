@@ -2,6 +2,8 @@
 
 A lightweight LLM persona chat app built with **uni-app (Vue 3)**. **No backend, fully on-device** — it calls any **OpenAI-compatible** `/chat/completions` endpoint (including **Ollama** local models) and runs across **App / H5 / WeChat Mini Program**.
 
+Memory system inspiration: <https://github.com/Koishi007/koishi-ai-pet>
+
 ## ✨ Features
 
 - **Persona chat**: 4 built-in personas (Gentle Big Sister / Energetic Junior / Koishi / Tsundere Catgirl) plus fully custom persona prompts; **each conversation has its own independent persona** — switch conversations to switch personas
@@ -85,3 +87,4 @@ Runs in Node with a mocked `uni` store, covering memory parsing, dedup & merge, 
 
 - WeChat Mini Program requires configuring **request legal domains** in the MP admin console (App works as long as it's online); when voice reading is enabled, also add the TTS API domain (e.g. `dashscope.aliyuncs.com`) to the legal domains
 - All data stays on your device; no cloud sync
+
