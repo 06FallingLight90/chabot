@@ -123,6 +123,7 @@ assert(storage.getScene() === '用户下午在咖啡馆闲聊', 'Scene 行已更
 const sys = captured.data.messages[0]
 assert(sys.role === 'system' && sys.content.includes('[记忆]'), 'system 包含记忆指南')
 assert(sys.content.includes('[情景]') && sys.content.includes('当前时间'), 'system 包含情景指南与时间')
+assert(sys.content.includes('[记忆容量]') && sys.content.includes('/20'), 'system 注入 L1 容量状态（chat.js → buildSystemPrompt 接线）')
 assert(captured.data.messages[captured.data.messages.length - 1].content === '你好', '末尾为用户消息')
 assert(captured.data.stream === false, '请求显式关闭流式（兼容 Ollama 默认流式）')
 assert(kv.get('chabot_conversations')[0].messages.length === 2, '对话落库 2 条（存于会话）')
@@ -646,6 +647,35 @@ assert(st22.effectiveImportance(oldB) < 3.99, '新记忆产生后旧记忆相对
 assert(st22.effectiveImportance(newM) >= 3.99, '最新记忆不衰减')
 // 时间标签：虚拟模式为相对指示
 assert(st22.formatTime(newM.created_at) === '（较新）', `虚拟模式时间标签为相对指示（${st22.formatTime(newM.created_at)}）`)
+
+console.log('\n[23] L1 上限硬兜底（20 条自动降级）与全量召回')
+// 批量写入 30 条 L1（addMemory 强制 L1 importance≥3）→ 超限部分自动降级为 L2
+for (let i = 0; i < 30; i++) {
+	chat.memoryStore.addMemory(`L1批量测试记忆${i}`, (i % 5) + 1, 'L1')
+}
+const l1s23 = chat.memoryStore.listMemories().filter((r) => r.level === 'L1')
+assert(l1s23.length === 20, `L1 数量恰好收敛到上限 20（实际 ${l1s23.length}）`)
+const demoted23 = chat.memoryStore.listMemories().filter((r) => r.level === 'L2' && r.content.startsWith('L1批量测试记忆'))
+assert(demoted23.length === 10, `超限 10 条自动降级为 L2（实际 ${demoted23.length}）`)
+assert(demoted23.some((r) => r.content === 'L1批量测试记忆0'), '重要性最低（最早创建的 i3）优先被降级')
+assert(chat.memoryStore.listMemories().some((r) => r.content === 'L1批量测试记忆29'), '重要性最高的 L1 保留')
+const usage23 = chat.memoryStore.l1Usage()
+assert(usage23.max === 20 && usage23.count === 20, `l1Usage 返回容量状态（${usage23.count}/${usage23.max}）`)
+// 全量召回：retrieveContext 输出包含所有 L1
+const l1Contents23 = l1s23.map((r) => r.content)
+const ctx23 = chat.memoryStore.retrieveContext('')
+assert(l1Contents23.every((c) => ctx23.includes(c)), 'retrieveContext 全量召回所有 L1')
+// 修改操作把 L2 提为 L1 超限时同样受硬兜底约束
+chat.memoryStore.save('event', 'L1硬兜底测试-L2', ['L1'], 5, 'L2')
+chat.memoryStore.saveFromLine('Memory: 修改 L1硬兜底测试-L2 → L1硬兜底测试-提级 | importance:5 | level:L1')
+const l1AfterMod23 = chat.memoryStore.listMemories().filter((r) => r.level === 'L1')
+assert(l1AfterMod23.length === 20, '修改提级超限时 L1 仍被约束在 20')
+assert(l1AfterMod23.some((r) => r.content === 'L1硬兜底测试-提级'), '提级记忆保留（importance 最高优先）')
+// 容量状态注入（buildSystemPrompt 方案 B 辅助段）
+const prompts23 = await import('../utils/prompts.js')
+const sys23 = prompts23.buildSystemPrompt('人格', '记忆文本', [], '', [], { count: 20, max: 20 })
+assert(sys23.includes('[记忆容量]') && sys23.includes('20/20'), 'buildSystemPrompt 注入 L1 容量状态')
+assert(!prompts23.buildSystemPrompt('人格', '记忆文本', [], '', [], null).includes('[记忆容量]'), '未传 l1Usage 时不注入容量段')
 
 console.log('\n================================')
 if (failed === 0) {

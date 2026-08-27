@@ -3,14 +3,15 @@
  * - 三级记忆 L1/L2/L3（核心事实 / 情景记忆 / 临时信息），importance 1-5
  * - 有效重要性 = 基础分 × 时间半衰期衰减 × 回忆强化因子
  * - 关键词检索 + 轻量文本相似度去重（近似重复合并、召回冷却、复读加权）
- * - 分层召回：核心槽 + 新鲜槽 + MMR 多样性槽
+ * - 分层召回：全量 L1（上限 20，超出自动将重要性最低的降级为 L2）+ 新鲜槽 + MMR 多样性槽
  * - 维护：L3 过期清理、L2→L3 降级、容量淘汰
  */
 
 import { getMemories, replaceMemories, persistMemories, nextMemoryId, getConversationPersonality, getSetting } from './storage.js'
 
 const MAX_MEMORIES = 200 // 记忆最大容量
-const RECALL_COUNT = 10 // 每次对话召回的记忆条数
+const RECALL_COUNT = 30 // 每次对话召回的记忆条数（全量 L1 优先 + 新鲜/MMR 补足）
+const L1_MAX_COUNT = 20 // L1 核心记忆数量上限（超出时自动将重要性最低的降级为 L2）
 const RECALL_COOLDOWN_SECONDS = 300 // 记忆召回冷却时间（秒）
 const L3_EXPIRE_DAYS = 3 // L3 临时记忆过期天数
 const DEDUP_THRESHOLD = 0.6 // 近似重复阈值（低于此值视为不同记忆）
@@ -329,6 +330,7 @@ export class MemoryStore {
 			level
 		})
 		persistMemories()
+		this._enforceL1Limit() // 修改可能把 L2 提为 L1，需重新约束 L1 上限
 		return this._restoreUndo(before, row)
 	}
 
@@ -490,22 +492,6 @@ export class MemoryStore {
 		return picked
 	}
 
-	/** 核心记忆：有效重要性最高的 N 条 */
-	queryCore(limit = 5) {
-		const pool = [...this._rows()]
-			.sort(
-				(a, b) =>
-					(b.importance || 0) - (a.importance || 0) ||
-					(b.created_at || '').localeCompare(a.created_at || '')
-			)
-			.slice(0, limit * 5)
-		const scored = pool.filter((r) => this.effectiveImportance(r) >= 3.5)
-		scored.sort((a, b) => this.effectiveImportance(b) - this.effectiveImportance(a))
-		const picked = scored.slice(0, limit)
-		this.touch(picked)
-		return picked
-	}
-
 	/** 新鲜记忆：最近 N 小时内的记忆（virtual 模式相对剧情时刻） */
 	queryRecent(hours = 24, limit = 3) {
 		const ref = this._isVirtual() ? this._decayRef() : Date.now()
@@ -543,20 +529,39 @@ export class MemoryStore {
 		return picked
 	}
 
-	/** 构建记忆上下文：核心槽 + 新鲜槽 + MMR 多样性槽 */
+	/** 当前会话 L1 核心记忆用量（供提示词注入容量状态，引导 LLM 自主调控 L1 数量） */
+	l1Usage() {
+		return { count: this._rows().filter((r) => r.level === 'L1').length, max: L1_MAX_COUNT }
+	}
+
+	/** 构建记忆上下文：全量 L1 + 新鲜槽 + MMR 多样性槽（核心槽并入 L1 全量，避免重复） */
 	retrieveContext(userMessage = '') {
 		const total = Math.max(3, RECALL_COUNT)
-		const coreN = Math.max(1, Math.round(total * 0.3))
-		const recentN = Math.max(1, Math.round(total * 0.2))
-		const mmrN = Math.max(1, total - coreN - recentN)
-		const mmrCandidates = Math.max(mmrN + 3, 8)
+		const rows = this._rows()
 
+		// 全量召回 L1 核心事实（importance 降序、新的在前），优先占满配额
+		const l1s = rows
+			.filter((r) => r.level === 'L1')
+			.sort(
+				(a, b) =>
+					(b.importance || 0) - (a.importance || 0) ||
+					(b.created_at || '').localeCompare(a.created_at || '')
+			)
 		const seen = new Set()
 		const results = []
-		for (const m of this.queryCore(coreN)) if (!seen.has(m.id)) { seen.add(m.id); results.push(m) }
-		for (const m of this.queryRecent(24, recentN)) if (!seen.has(m.id)) { seen.add(m.id); results.push(m) }
-		const candidates = this._queryByText(userMessage, mmrCandidates).filter((m) => !seen.has(m.id))
-		for (const m of this._mmrSelect(candidates, results, mmrN)) if (!seen.has(m.id)) { seen.add(m.id); results.push(m) }
+		for (const m of l1s) if (!seen.has(m.id)) { seen.add(m.id); results.push(m) }
+		this.touch(l1s)
+
+		// 剩余配额给新鲜槽 + MMR 多样性槽
+		const remaining = total - results.length
+		if (remaining > 0) {
+			const recentN = Math.max(1, Math.round(remaining * 0.3))
+			const mmrN = Math.max(1, remaining - recentN)
+			const mmrCandidates = Math.max(mmrN + 3, 8)
+			for (const m of this.queryRecent(24, recentN)) if (!seen.has(m.id)) { seen.add(m.id); results.push(m) }
+			const candidates = this._queryByText(userMessage, mmrCandidates).filter((m) => !seen.has(m.id))
+			for (const m of this._mmrSelect(candidates, results, mmrN)) if (!seen.has(m.id)) { seen.add(m.id); results.push(m) }
+		}
 
 		if (!results.length) return ''
 
@@ -640,8 +645,34 @@ export class MemoryStore {
 		return r.last_accessed_at || r.created_at
 	}
 
+	/**
+	 * L1 硬兜底：L1 数量超过 L1_MAX_COUNT 时，将重要性最低的 L1 降级为 L2
+	 * （按 importance 升序、同分按创建时间旧优先；i5 永久记忆不豁免总量上限）
+	 * @returns {number} 降级条数
+	 */
+	_enforceL1Limit() {
+		const rows = this._rows()
+		const l1s = rows.filter((r) => r.level === 'L1')
+		if (l1s.length <= L1_MAX_COUNT) return 0
+		const overflow = l1s.length - L1_MAX_COUNT
+		l1s.sort(
+			(a, b) =>
+				(a.importance || 0) - (b.importance || 0) ||
+				(a.created_at || '').localeCompare(b.created_at || '')
+		)
+		let demoted = 0
+		for (const r of l1s) {
+			if (demoted >= overflow) break
+			r.level = 'L2'
+			demoted++
+		}
+		if (demoted) persistMemories()
+		return demoted
+	}
+
 	/** 容量控制：L3 过期硬清理 → 超容量按有效重要性淘汰低权重（virtual 模式过期基准为剧情时刻） */
 	_enforceCapacity() {
+		this._enforceL1Limit()
 		let rows = this._rows()
 		// virtual 模式：以剧情时刻为基准计算过期线，现实中断不触发清理
 		const ref = this._isVirtual() ? this._decayRef() : Date.now()

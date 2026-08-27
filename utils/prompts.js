@@ -51,8 +51,9 @@ export const CUSTOM_PROMPT_SAMPLE = `你是沉稳可靠的学长，温和耐心�
  * @param {string[]} sceneHistory 情景历史数组（最新在末尾，可为空）
  * @param {string} nowText 当前时间描述（可为空）
  * @param {string[]} [emojiList] 表情名清单（可为空，为空时不注入表情包规则）
+ * @param {{count:number, max:number}} [l1Usage] L1 核心记忆用量（可为空，非空时注入容量状态引导 LLM 自主调控 L1）
  */
-export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText, emojiList) {
+export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText, emojiList, l1Usage) {
 	let s = `${personalityPrompt.trim()}\n\n${CHAT_GUIDE}\n\n${MEMORY_GUIDE}\n\n${SCENE_GUIDE}`
 	const state = []
 	if (nowText) state.push(nowText)
@@ -66,6 +67,12 @@ export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, n
 	}
 	if (state.length) s += `\n\n[当前状态]\n${state.join('\n')}`
 	if (memoryText) s += `\n\n[你对用户的记忆]\n${memoryText}`
+	// L1 容量状态：满员时引导 LLM 先删除/修改旧 L1 再新增，减少被硬兜底降级的浪费
+	if (l1Usage && l1Usage.max) {
+		s +=
+			`\n\n[记忆容量] 当前 L1 核心记忆 ${l1Usage.count}/${l1Usage.max}。` +
+			'新增 L1 前若已满，请先用 Memory 修改/删除逐字移除不再重要的旧 L1（修改/删除必须严格逐字引用[你对用户的记忆]中的原文），再写入新 L1。'
+	}
 	if (Array.isArray(emojiList) && emojiList.length) {
 		s += `\n\n${EMOJI_GUIDE}\n${emojiList.map((n) => `- ${n}`).join('\n')}`
 	}

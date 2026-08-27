@@ -62,7 +62,7 @@
 - **手动管理**：记忆页「新建」走 `addMemory(content, importance, level)`——直接追加一条不做相似度合并（区别于 LLM 写入的 `save`）；「多选删除」走 `deleteMemories(ids)` 批量删除
 - **去重合并**：字符 bigram Jaccard(0.6) + LCS 序列相似度(0.4)，≥0.6 视为近似、≥0.85 触发召回冷却拦截
 - **召回冷却**：记忆被召回后 300s 内禁止重复保存；复读视为强调 → importance +1（上限 5）
-- **分层检索** `retrieveContext`：核心槽(30%) + 新鲜槽(20%) + MMR 多样性槽(50%)，λ=0.7
+- **分层检索** `retrieveContext`：**全量召回所有 L1 核心事实**（`L1_MAX_COUNT=20` 上限，超出时自动将重要性最低的 L1 降级为 L2，i5 不豁免总量；降级按 importance 升序、同分按创建时间旧优先）+ 新鲜槽 + MMR 多样性槽，总配额 `RECALL_COUNT=30`，λ=0.7；L1 满员时 system 注入 `[记忆容量]` 段（`buildSystemPrompt` 的 `l1Usage` 参数）引导 LLM 先逐字修改/删除旧 L1 再新增
 - **维护** `maintenance`：L3 过期清理(3天) / L2→L3 降级(有效重要性<2.2) / L3 高频访问升 L2(6h 内 6 次) / 容量淘汰(上限 200)
 - **等级-优先级一致性**：L1 至少 3，L3 不超过 4，importance≤2 自动降 L3
 - 关键常量均位于 `memory.js` 顶部
@@ -89,7 +89,7 @@
 
 ### 聊天链路（utils/chat.js）
 
-`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文+表情包清单[`emojiEnabled` 开启且有表情时，见 `EMOJI_GUIDE`]）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → **`parseAndValidateReply` 格式校验**（须含对话文本、Scene 行有内容、Memory 行可解析；检测非行首 `Scene:`/`Memory:` 标记（未独立成行）与"缺 `Memory:` 前缀却带 `| keywords:`/`| importance:`/`| level:` 结构"的伪 Memory 行；回复中的 `$表情名$` 必须在表情清单内，否则判定格式不合格；不合格自动重新请求，上限设置项 `maxRequestAttempts`，默认 5，达上限抛错）→ 校验通过才解析 `Scene:` 行更新情景、`Memory:` 行入库并得到清理后的回复文本 → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
+`sendMessage`：检索记忆 → 组装 system（人格+规则+记忆指南+情景指南+当前状态[时间/情景]+记忆上下文+L1 容量状态[`[记忆容量]` 段，见 `buildSystemPrompt` 的 `l1Usage` 参数]+表情包清单[`emojiEnabled` 开启且有表情时，见 `EMOJI_GUIDE`]）→ 注入「未压缩历史（最近 15 条）」→ 调 LLM → **`parseAndValidateReply` 格式校验**（须含对话文本、Scene 行有内容、Memory 行可解析；检测非行首 `Scene:`/`Memory:` 标记（未独立成行）与"缺 `Memory:` 前缀却带 `| keywords:`/`| importance:`/`| level:` 结构"的伪 Memory 行；回复中的 `$表情名$` 必须在表情清单内，否则判定格式不合格；不合格自动重新请求，上限设置项 `maxRequestAttempts`，默认 5，达上限抛错）→ 校验通过才解析 `Scene:` 行更新情景、`Memory:` 行入库并得到清理后的回复文本 → 落库该清理文本（标记不混入历史，`getHistoryForUI` 展示层再兜底剔除行首标记，兼容旧数据）→ 执行维护 → 异步检查自动压缩（`maybeCompress`）。**压缩概要并入首条 system 末尾**，请求始终只含一条位于开头的 system——Ollama 等模板要求 system 必须在最前且只能一条，多条会抛 Jinja 错误
 
 ### 上下文压缩（utils/chat.js）
 

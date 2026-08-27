@@ -163,11 +163,11 @@ export async function sendMessage(userText, opts = {}) {
 	// 记录发送前的情景历史长度：若本响应更新了情景，重新生成时据此撤回
 	const sceneLenBefore = getSceneHistory().length
 
-	// 1. 检索记忆（核心槽 + 新鲜槽 + MMR 多样性槽）
+	// 1. 检索记忆（全量 L1 + 新鲜槽 + MMR 多样性槽）
 	const memoryText = memoryStore.retrieveContext(userText)
 	addLog('info', '发送消息', userText.slice(0, 40))
 
-	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆 + 表情包清单）
+	// 2. 组装 system prompt（人格 + 规则 + 记忆指南 + 情景指南 + 当前状态 + 记忆 + L1 容量 + 表情包清单）
 	const personalityPrompt =
 		s.personalityId === 'custom' ? s.customPrompt : getPersonalityById(s.personalityId).prompt
 	const system = buildSystemPrompt(
@@ -176,7 +176,9 @@ export async function sendMessage(userText, opts = {}) {
 		getSceneHistory(),
 		s.timeMode === 'virtual' ? '' : buildNowText(),
 		// 表情包开关：禁用时不传清单（buildSystemPrompt 不注入表情包规则，LLM 不会主动使用表情）
-		s.emojiEnabled ? emojiListForPrompt() : []
+		s.emojiEnabled ? emojiListForPrompt() : [],
+		// L1 容量状态：引导 LLM 在 L1 满员时先逐字删除/修改旧 L1 再新增
+		memoryStore.l1Usage()
 	)
 
 	// 3-5. 请求 → 格式校验 → 解析：回复格式不合格时自动重试（上限 maxRequestAttempts）。
