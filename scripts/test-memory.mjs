@@ -677,6 +677,115 @@ const sys23 = prompts23.buildSystemPrompt('人格', '记忆文本', [], '', [], 
 assert(sys23.includes('[记忆容量]') && sys23.includes('20/20'), 'buildSystemPrompt 注入 L1 容量状态')
 assert(!prompts23.buildSystemPrompt('人格', '记忆文本', [], '', [], null).includes('[记忆容量]'), '未传 l1Usage 时不注入容量段')
 
+console.log('\n[24] 拟真聊天（countSentences / 格式校验 / burst 落库 / 主动消息链路）')
+// countSentences 纯函数
+assert(chat.countSentences('在吗') === 0, 'countSentences：无句末标点为 0')
+assert(chat.countSentences('在吗？') === 1, 'countSentences：单句为 1')
+assert(chat.countSentences('哈哈。。') === 1, 'countSentences：连续标点合并为 1')
+assert(chat.countSentences('好的。好的！') === 2, 'countSentences：两句为 2')
+assert(chat.countSentences('嗯嗯~') === 0, 'countSentences：语气词"~"不计句')
+// parseAndValidateReply 拟真模式校验
+let pv = chat.parseAndValidateReply('今天天气真好。适合出门散步。', { proactive: true })
+assert(pv.ok === false && pv.reason.includes('超过一句话'), '拟真模式：一条消息两句话判定不合格')
+const emoMod = await import('../utils/emojis.js')
+emoMod.addEmojiData('小狗', 'src://dog')
+emoMod.addEmojiData('小猫', 'src://cat')
+emoMod.addEmojiData('兔子', 'src://rabbit')
+pv = chat.parseAndValidateReply('好的呀 $小狗$ $小猫$ $兔子$', { proactive: true })
+assert(pv.ok === false && pv.reason.includes('连续表情'), '拟真模式：连续表情超过 2 个判定不合格')
+pv = chat.parseAndValidateReply('在吗？\n今天天气真好~', { proactive: true })
+assert(pv.ok === true, '拟真模式：换行分条且每条 ≤1 句通过校验')
+pv = chat.parseAndValidateReply('在吗？', { proactive: false })
+assert(pv.ok === true, '非拟真模式不受一句话约束')
+// 启用拟真 + 无用户消息 → 非 force 不触发
+chat.saveSettings({
+	baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-test',
+	temperature: 0.8, personalityId: 'gentle', customPrompt: '', timeMode: 'real',
+	proactiveEnabled: true, proactiveStartHour: 0, proactiveEndHour: 23, proactiveLevel: 'medium'
+})
+const pa = await import('../utils/chat-proactive.js')
+const rows24 = storage.getChatRows()
+assert(rows24.length === 0 || rows24.every((r) => r.role !== 'user'), '当前会话无用户消息（拟真门禁前置）')
+let r24 = await pa.sendProactiveBurst()
+assert(r24 === null, '非调试：尚无用户消息时不主动发（返回 null）')
+// 补一条用户消息，非 force 可触发
+storage.addChatRow('user', '在吗')
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '在呢~ 你吃饭了吗？\nScene: 用户晚上在家休息' } }] } })
+}
+r24 = await pa.sendProactiveBurst()
+assert(!!r24 && r24.lines.length === 1, '非调试：到期触发发送成功（单条 burst）')
+assert(captured.data.messages[0].content.includes('[拟真聊天]'), '主动消息 system 注入拟真规则')
+assert(captured.data.messages[captured.data.messages.length - 1].role === 'user', '末尾为内部指令行（不落库）')
+assert(storage.getChatRows()[storage.getChatRows().length - 1].content === '在呢~ 你吃饭了吗？', '主动消息落库为 assistant 行')
+assert(storage.getScene() === '用户晚上在家休息', '主动消息更新情景')
+// 主动消息格式不合格自动重试
+let failP = true
+globalThis.uni.request = (opts) => {
+	captured = opts
+	if (failP) {
+		failP = false
+		opts.success({ statusCode: 200, data: { choices: [{ message: { content: '今天过得怎么样呀。你吃饭了吗。' } }] } })
+		return
+	}
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '今天过得怎么样呀' } }] } })
+}
+r24 = await pa.sendProactiveBurst()
+assert(!!r24 && r24.lines[0] === '今天过得怎么样呀', '主动消息超过一句话自动重试后成功')
+// 调试按钮：忽略拟真开关仍可强制发送（仅校验 API 配置）
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: false })
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '调试消息' } }] } })
+}
+r24 = await pa.debugProactiveMessage()
+assert(!!r24 && r24.lines[0] === '调试消息', '调试按钮：未开启拟真也可强制发送一条')
+// 恢复拟真开，测试 sendMessage 的 burst 拆分与重新生成移除连续行
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: true })
+const rowsB = storage.getChatRows().length
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '第一条\n第二条\nScene: 用户在沙发上' } }] } })
+}
+const r24b = await chat.sendMessage('帮我看看')
+assert(Array.isArray(r24b.burst) && r24b.burst.length === 2, '拟真 sendMessage 返回 burst 数组')
+const rowsAfterB = storage.getChatRows()
+assert(rowsAfterB[rowsAfterB.length - 2].content === '第一条' && rowsAfterB[rowsAfterB.length - 1].content === '第二条', 'burst 按换行拆为多条 assistant 行')
+assert(!!rowsAfterB[rowsAfterB.length - 1].rollback, 'burst 最后一行携带 rollback')
+assert(storage.getScene() === '用户在沙发上', 'burst 回复更新情景')
+assert(chat.popLastAssistant() === '帮我看看', '重新生成返回被撤回的用户消息')
+assert(storage.getChatRows().length === rowsB + 1, 'burst 行全部移除，用户消息保留待重发')
+assert(storage.getChatRows()[storage.getChatRows().length - 1].content === '帮我看看', '重发后最后一行为用户消息')
+// 调度与倒计时：开启后 catchUpProactive 重排并返回倒计时；关闭后定时器清空
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: true })
+pa.catchUpProactive()
+const cd = pa.getProactiveCountdown()
+assert(cd !== null && cd > 0, '调度后 getProactiveCountdown 返回倒计时（毫秒）')
+// 自定义倒计时：rearmProactive 强制按新值重排（>0 时固定秒数，下限 10s），清 0 恢复档位
+const cdBefore = pa.getProactiveCountdown()
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveCustomSeconds: 30 })
+pa.catchUpProactive() // catchUp 不强制重排：定时器已挂载时保持原倒计时
+assert(pa.getProactiveCountdown() === cdBefore || (pa.getProactiveCountdown() !== null && Math.abs(pa.getProactiveCountdown() - cdBefore) < 1000), 'catchUp 不改设置时不重置倒计时')
+pa.rearmProactive()
+const cdCustom = pa.getProactiveCountdown()
+assert(cdCustom !== null && cdCustom >= 25000 && cdCustom <= 31000, 'rearm 后自定义 30 秒倒计时约 30 秒')
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveCustomSeconds: 0 })
+pa.rearmProactive()
+const cdLevel = pa.getProactiveCountdown()
+assert(cdLevel !== null && cdLevel >= 60000, '清 0 后恢复档位随机间隔（≥60s）')
+// 调度鲁棒性：loading 抑制只拦发送不杀调度；解除后仍健康
+pa.setProactiveSuppressed(true)
+pa.catchUpProactive()
+assert(pa.getProactiveCountdown() !== null, '抑制期间调度器仍保持重排（倒计时存在）')
+pa.setProactiveSuppressed(false)
+assert(pa.getProactiveCountdown() !== null, '解除抑制后调度健康（倒计时恢复）')
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: false })
+pa.catchUpProactive()
+assert(pa.getProactiveCountdown() === null, '关闭拟真后无倒计时（定时器已清空）')
+// 关闭拟真，恢复常规行为
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: false })
+
 console.log('\n================================')
 if (failed === 0) {
 	console.log('全部断言通过 ✓')

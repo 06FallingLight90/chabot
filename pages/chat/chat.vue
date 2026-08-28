@@ -58,6 +58,7 @@
 	import { getBackgroundImage, getScene, setScene } from '../../utils/storage.js'
 	import { getEmojis } from '../../utils/emojis.js'
 	import { speakText, stopSpeaking } from '../../utils/tts.js'
+	import { setProactiveSuppressed, catchUpProactive, rearmProactive } from '../../utils/chat-proactive.js'
 	import ChatHeader from './components/chat-header.vue'
 	import ChatMsgList from './components/chat-msg-list.vue'
 	import ChatInputBar from './components/chat-input-bar.vue'
@@ -88,12 +89,6 @@
 				_kbSupported: false    // 键盘高度监听可用性（非模板字段）
 			}
 		},
-		computed: {
-			lastIsAssistant() {
-				const len = this.messages.length
-				return len > 0 && this.messages[len - 1].role === 'assistant'
-			}
-		},
 		onShow() {
 			// 等待 LLM 响应期间不重载消息列表：刚发送的用户消息尚未落库，
 			// 若切到外部页面再切回时重新拉取历史，这条消息会从记录中消失
@@ -103,8 +98,12 @@
 			this.scene = getScene()
 			this.refreshEmojis()
 			if (this.$refs.msgList) this.$refs.msgList.resetScrollState()
+			// 拟真聊天：回到聊天页立即按当前会话设置重排调度（切会话/切 tab 后响应最新状态）
+			catchUpProactive()
 		},
 		onLoad() {
+			// 拟真聊天：接收调度器主动消息送达事件，刷新消息列表（页面在前台时的增量更新）
+			if (uni.$on) uni.$on('proactive-burst', this.onProactiveBurst)
 			// 监听键盘高度（App / 微信小程序）：表情栏打开时唤起键盘，等键盘弹出
 			// （视口已压缩）后再关闭表情栏，输入栏直接从"表情栏上方"落到"键盘上方"，不掉底
 			// #ifdef APP-PLUS || MP-WEIXIN
@@ -123,6 +122,8 @@
 		onUnload() {
 			this._unloaded = true
 			stopSpeaking()
+			setProactiveSuppressed(false)
+			if (uni.$off) uni.$off('proactive-burst', this.onProactiveBurst)
 			// #ifdef MP-WEIXIN
 			if (uni.offKeyboardHeightChange) uni.offKeyboardHeightChange(this.onKbChange)
 			// #endif
@@ -209,10 +210,16 @@
 				stopSpeaking() // 用户发送新消息时打断上一段语音
 				this.messages.push({ role: 'user', content: text })
 				this.loading = true
+				this.setLoadingState(true)
 				this.scrollBottom()
 				sendMessage(text)
-					.then(({ reply, saved }) => {
-						this.messages.push({ role: 'assistant', content: reply })
+					.then(({ reply, saved, burst }) => {
+						// 拟真模式：回复按换行拆分为多条气泡，逐条展示（与落库行一致）
+						if (burst && burst.length) {
+							for (const line of burst) this.messages.push({ role: 'assistant', content: line })
+						} else {
+							this.messages.push({ role: 'assistant', content: reply })
+						}
 						this.scene = getScene() // LLM 可能更新了当前情景
 						if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
 						this.speakReply(reply)
@@ -225,6 +232,7 @@
 					})
 					.finally(() => {
 						this.loading = false
+						this.setLoadingState(false)
 						this.scrollBottom()
 					})
 			},
@@ -240,15 +248,21 @@
 				stopSpeaking() // 重新生成前打断上一段语音
 				const lastUser = popLastAssistant()
 				if (!lastUser) return
-				// 移除本地展示中的最后一条助手消息，然后静默重发上一条用户消息
-				if (this.lastIsAssistant) this.messages.pop()
+				// popLastAssistant 已从存储移除该请求的整段回复（拟真 burst 为连续多条 assistant 行），
+				// 直接按存储重载展示，避免只删最后一条气泡导致 burst 前半段残留
+				this.messages = getHistoryForUI()
 				this.scene = getScene() // popLastAssistant 已撤回该响应记录的情景，同步展示
 				this.input = ''
 				this.loading = true
+				this.setLoadingState(true)
 				// 重发最近一次请求：用户消息已落库，persistUser:false 避免重复记录同一句话
 				sendMessage(lastUser, { persistUser: false })
-					.then(({ reply, saved }) => {
-						this.messages.push({ role: 'assistant', content: reply })
+					.then(({ reply, saved, burst }) => {
+						if (burst && burst.length) {
+							for (const line of burst) this.messages.push({ role: 'assistant', content: line })
+						} else {
+							this.messages.push({ role: 'assistant', content: reply })
+						}
 						this.scene = getScene()
 						if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
 						this.speakReply(reply)
@@ -261,8 +275,21 @@
 					})
 					.finally(() => {
 						this.loading = false
+						this.setLoadingState(false)
 						this.scrollBottom()
 					})
+			},
+			// ---- 拟真聊天 ----
+			// 同步页面 loading 状态给调度器：等待 LLM 回复期间不主动打扰
+			setLoadingState(v) {
+				setProactiveSuppressed(!!v)
+			},
+			// 调度器主动消息送达 → 重载历史刷新气泡（页面在前台时的增量更新）
+			onProactiveBurst() {
+				if (this._unloaded || this.loading) return
+				this.messages = getHistoryForUI()
+				this.scene = getScene()
+				this.scrollBottom()
 			},
 			confirmClear() {
 				uni.showModal({
@@ -285,6 +312,7 @@
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
 				this.refreshHeader()
+				rearmProactive() // 新会话设置可能不同，立即按新会话重排
 				uni.showToast({ title: '已开始新对话', icon: 'none' })
 			},
 			openHistory() {
@@ -299,6 +327,7 @@
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
 				this.refreshHeader()
+				rearmProactive() // 切换会话后立即按新会话设置重排
 			},
 			// ---- 当前情景编辑 ----
 			openSceneEdit() {

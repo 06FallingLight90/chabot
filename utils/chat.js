@@ -111,12 +111,14 @@ export function popLastAssistant() {
 	}
 	if (!req) return ''
 	// 定位该请求对应的最后一条用户消息（从后往前匹配，取最近一次），
-	// 若紧随其后有 assistant 回复则移除并撤回其情景/记忆；发送失败时无回复可移，仅重发
+	// 若其后有 assistant 回复则移除并撤回其情景/记忆（拟真模式 burst 为连续多条 assistant 行，
+	// 一并移除，rollback 挂在最后一行）；发送失败时无回复可移，仅重发
 	for (let i = rows.length - 1; i >= 0; i--) {
 		if (rows[i].role === 'user' && rows[i].content === req) {
-			const reply = rows[i + 1]
-			if (reply && reply.role === 'assistant') {
-				rollbackAssistantEffects(reply)
+			let last = i
+			while (last + 1 < rows.length && rows[last + 1].role === 'assistant') last++
+			if (last > i) {
+				rollbackAssistantEffects(rows[last])
 				truncateChat(i + 1)
 			}
 			break
@@ -156,6 +158,8 @@ export async function sendMessage(userText, opts = {}) {
 	if (!s.apiKey) throw new Error('请先在「设置」中填写 API Key')
 	if (!s.baseUrl) throw new Error('请先在「设置」中填写接口地址')
 	if (!s.model) throw new Error('请先在「设置」中填写模型名称')
+	// 拟真聊天：该会话开启后，所有回复均受"每条 ≤1 句、连续表情 ≤2"约束，并按换行拆分为多条气泡
+	const proactive = !!s.proactiveEnabled
 
 	// 缓存最近一次请求：聊天页"重新生成"直接重发该内容（重发时 persistUser:false，不重复落库用户消息）
 	lastRequest.value = userText
@@ -178,7 +182,9 @@ export async function sendMessage(userText, opts = {}) {
 		// 表情包开关：禁用时不传清单（buildSystemPrompt 不注入表情包规则，LLM 不会主动使用表情）
 		s.emojiEnabled ? emojiListForPrompt() : [],
 		// L1 容量状态：引导 LLM 在 L1 满员时先逐字删除/修改旧 L1 再新增
-		memoryStore.l1Usage()
+		memoryStore.l1Usage(),
+		// 拟真聊天：注入每条消息 ≤1 句的规则（开启时生效）
+		proactive
 	)
 
 	// 3-5. 请求 → 格式校验 → 解析：回复格式不合格时自动重试（上限 maxRequestAttempts）。
@@ -211,7 +217,7 @@ export async function sendMessage(userText, opts = {}) {
 				reasoningEffort: s.reasoningEffort // 默认关闭思考（none），本地思考模型（如 Qwen3.5）默认思考会占满输出 token 导致回复为空
 			})
 
-			const parsed = parseAndValidateReply(reply.text)
+			const parsed = parseAndValidateReply(reply.text, { proactive })
 			if (parsed.ok) {
 				result = parsed
 				break
@@ -233,10 +239,19 @@ export async function sendMessage(userText, opts = {}) {
 	// 重新加载历史会把标记显示在气泡里（此前 bug），也会污染上下文压缩。
 	// assistant 行附带 rollback 信息（响应前的情景长度 + 本响应的记忆撤销清单），
 	// 重新生成时据此撤回该响应记录的情景与记忆。
+	// 拟真模式：按换行拆分多条落库（每条 ≤1 句一条气泡），rollback 挂在最后一行
 	if (persistUser) addChatRow('user', userText)
-	addChatRow('assistant', result.cleanReply || '…', {
-		rollback: { sceneLenBefore, memoryUndos: result.memoryUndos || [] }
-	})
+	const cleanReply = result.cleanReply || '…'
+	const rollback = { sceneLenBefore, memoryUndos: result.memoryUndos || [] }
+	if (proactive) {
+		const lines = cleanReply.split('\n').map((l) => l.trim()).filter(Boolean)
+		if (!lines.length) lines.push('…')
+		lines.forEach((line, idx) => {
+			addChatRow('assistant', line, idx === lines.length - 1 ? { rollback } : undefined)
+		})
+	} else {
+		addChatRow('assistant', cleanReply, { rollback })
+	}
 	if (result.newScene) {
 		setScene(result.newScene)
 		addLog('info', '情景更新', result.newScene)
@@ -249,17 +264,44 @@ export async function sendMessage(userText, opts = {}) {
 	// 8. 自动压缩检查（异步执行，不阻塞回复展示）
 	maybeCompress().catch(() => { })
 
-	return { reply: result.cleanReply || '…', saved: result.saved }
+	return { reply: cleanReply, saved: result.saved, burst: proactive ? cleanReply.split('\n').map((l) => l.trim()).filter(Boolean) : undefined }
+}
+
+/**
+ * 统计文本句子数：按句末标点（。！？!?…）计，连续标点（如"哈哈。。"）合并为一处，
+ * 用于拟真聊天"每条消息 ≤1 句"的校验。
+ * @param {string} text
+ * @returns {number}
+ */
+export function countSentences(text) {
+	const t = String(text || '').trim()
+	if (!t) return 0
+	let runs = 0
+	let inRun = false
+	for (const ch of t) {
+		if ('。！？!?…'.includes(ch)) {
+			if (!inRun) {
+				runs++
+				inRun = true
+			}
+		} else {
+			inRun = false
+		}
+	}
+	return runs
 }
 
 /**
  * 校验 LLM 回复格式并解析 Scene/Memory（校验通过才写库，供 sendMessage 重试使用）：
  * - 回复必须包含对话文本（仅 Scene/Memory 标记视为不合格）
  * - Scene 行必须有内容；Memory 行必须能被 parseMemoryLine 解析
+ * - 拟真模式（proactive:true）：每条文本行 ≤1 句、连续表情 ≤2，不合格触发重试
  * @param {string} text LLM 原始回复
- * @returns {{ok:boolean, reason?:string, saved?:number, newScene?:string|null, cleanReply?:string}}
+ * @param {{proactive?: boolean}} [opts]
+ * @returns {{ok:boolean, reason?:string, saved?:number, newScene?:string|null, cleanReply?:string, memoryUndos?:Array}}
  */
-function parseAndValidateReply(text) {
+export function parseAndValidateReply(text, opts) {
+	const proactive = !!(opts && opts.proactive)
 	// 表情名校验：回复中的 $名$ 必须存在于表情清单，否则判定格式不合格触发重试
 	// （避免 LLM 编造清单外的名字导致聊天页渲染出"坏图"）
 	const emojiMap = getEmojiMap()
@@ -294,6 +336,15 @@ function parseAndValidateReply(text) {
 		// （如 "✅ 更新：3. xxx | keywords:.. | importance:.. | level:.."），判定格式非法并触发重试
 		if (/\|\s*(?:keywords|importance|level):/i.test(line)) {
 			return { ok: false, reason: `疑似 Memory 行缺少 Memory: 前缀：${line.trim().slice(0, 28)}` }
+		}
+		// 拟真模式：每条消息（一行）≤1 句、连续表情 ≤2，超出即判定格式不合格触发重试
+		if (proactive) {
+			if (countSentences(line) > 1) {
+				return { ok: false, reason: `拟真模式消息超过一句话：${line.trim().slice(0, 20)}` }
+			}
+			if (extractEmojiNames(line).length > 2) {
+				return { ok: false, reason: `拟真模式连续表情超过 2 个：${line.trim().slice(0, 20)}` }
+			}
 		}
 		cleanLines.push(line)
 		if (line.trim()) hasContent = true

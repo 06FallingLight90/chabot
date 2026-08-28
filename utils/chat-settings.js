@@ -37,6 +37,12 @@ export function getSettings() {
 		ttsApiKey: getSetting('ttsApiKey', ''),
 		ttsModel: getSetting('ttsModel', 'qwen3-tts-flash'),
 		ttsVoice: getSetting('ttsVoice', 'Cherry'),
+		// 拟真聊天：仅现实时间模式生效；AI 在随机时间主动发消息（每条 ≤1 句、连续表情 ≤2）
+		proactiveEnabled: getSetting('proactiveEnabled', false),
+		proactiveStartHour: getSetting('proactiveStartHour', 9), // 主动消息时段起（时）
+		proactiveEndHour: getSetting('proactiveEndHour', 23), // 主动消息时段止（时）
+		proactiveLevel: getSetting('proactiveLevel', 'medium'), // 频率档位 low/medium/high
+		proactiveCustomSeconds: parseInt(getSetting('proactiveCustomSeconds', '0'), 10) || 0, // 调试：自定义倒计时（秒），>0 时覆盖档位
 		personaName: getPersonaName(personalityId)
 	}
 }
@@ -58,7 +64,23 @@ export function normalizeSettings(s) {
 		ttsEnabled: !s || s.ttsEnabled !== false,
 		ttsApiKey: String(s && s.ttsApiKey ? s.ttsApiKey : '').trim(),
 		ttsModel: String(s && s.ttsModel ? s.ttsModel : '').trim() || 'qwen3-tts-flash',
-		ttsVoice: String(s && s.ttsVoice ? s.ttsVoice : '').trim() || 'Cherry'
+		ttsVoice: String(s && s.ttsVoice ? s.ttsVoice : '').trim() || 'Cherry',
+		// 拟真聊天：开关默认关；时段钳制在 0-23；档位白名单
+		proactiveEnabled: !!s && s.proactiveEnabled === true,
+		proactiveStartHour: (() => {
+			const n = parseInt(s && s.proactiveStartHour, 10)
+			return Number.isNaN(n) ? 9 : Math.max(0, Math.min(23, n))
+		})(),
+		proactiveEndHour: (() => {
+			const n = parseInt(s && s.proactiveEndHour, 10)
+			return Number.isNaN(n) ? 23 : Math.max(0, Math.min(23, n))
+		})(),
+		proactiveLevel: ['low', 'medium', 'high'].includes(s && s.proactiveLevel) ? s.proactiveLevel : 'medium',
+		// 自定义倒计时（秒）：0=用档位；钳制在 0-3600，供调试快速触发
+		proactiveCustomSeconds: (() => {
+			const n = parseInt(s && s.proactiveCustomSeconds, 10)
+			return Number.isNaN(n) ? 0 : Math.max(0, Math.min(3600, n))
+		})()
 	}
 }
 

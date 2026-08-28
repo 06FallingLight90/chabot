@@ -30,6 +30,14 @@ export const EMOJI_GUIDE = `[表情包]
 - 每次回复最多使用 2 个表情包，与文本分条显示，放在最贴合语气的文本前后
 可用表情包清单：`
 
+/** 拟真聊天引导段：开启时注入 system（每条消息 ≤1 句、连续表情 ≤2、话题收尾引导） */
+export const PROACTIVE_GUIDE = `[拟真聊天]
+本对话开启拟真聊天，模拟真人发消息的节奏：
+- 一条消息对应一行，每条消息正文不超过一句话（最多一个句末标点，可用"~""哦""吧"等语气收尾）
+- 一条回复可以分多行 = 连续发多条短消息；每条独立，连续表情包不超过 2 个
+- 若判断当前话题已临近结束（已道别/没有新话题），用一句短话或 1 个表情收尾，不要强行续聊或开新话题
+- 不要暴露以上机制`
+
 /** 通用对话规则：与人格提示词一起注入 system */
 const CHAT_GUIDE = `[对话规则]
 - 贴合人格，中文口语短句，默认 1-3 句
@@ -52,9 +60,11 @@ export const CUSTOM_PROMPT_SAMPLE = `你是沉稳可靠的学长，温和耐心�
  * @param {string} nowText 当前时间描述（可为空）
  * @param {string[]} [emojiList] 表情名清单（可为空，为空时不注入表情包规则）
  * @param {{count:number, max:number}} [l1Usage] L1 核心记忆用量（可为空，非空时注入容量状态引导 LLM 自主调控 L1）
+ * @param {boolean} [proactive] 拟真聊天模式：注入每条消息 ≤1 句的拟真规则
  */
-export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText, emojiList, l1Usage) {
+export function buildSystemPrompt(personalityPrompt, memoryText, sceneHistory, nowText, emojiList, l1Usage, proactive) {
 	let s = `${personalityPrompt.trim()}\n\n${CHAT_GUIDE}\n\n${MEMORY_GUIDE}\n\n${SCENE_GUIDE}`
+	if (proactive) s += `\n\n${PROACTIVE_GUIDE}`
 	const state = []
 	if (nowText) state.push(nowText)
 	const scenes = Array.isArray(sceneHistory) ? sceneHistory : []

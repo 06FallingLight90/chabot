@@ -137,6 +137,73 @@
 		</view>
 
 		<view class="section">
+			<view class="sec-title">拟真聊天</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">拟真聊天</text>
+					<view class="mode-btns">
+						<view class="mode-btn" :class="{ on: s.proactiveEnabled }" @tap="s.proactiveEnabled = true">开启</view>
+						<view class="mode-btn" :class="{ on: !s.proactiveEnabled }" @tap="s.proactiveEnabled = false">关闭</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">
+					模拟真人发消息：AI 会在随机时间主动给你发消息（每条 ≤1 句、连续表情 ≤2）。仅「现实时间」模式生效；开启后本对话所有回复都按该短消息规则约束。
+				</view>
+			</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">主动消息时段</text>
+					<view class="proactive-window">
+						<picker
+							mode="selector"
+							:range="hours"
+							:value="hours.indexOf(s.proactiveStartHour)"
+							@change="(e) => s.proactiveStartHour = hours[e.detail.value]"
+						>
+							<view class="pick-btn">{{ s.proactiveStartHour }}:00</view>
+						</picker>
+						<text class="window-sep">—</text>
+						<picker
+							mode="selector"
+							:range="hours"
+							:value="hours.indexOf(s.proactiveEndHour)"
+							@change="(e) => s.proactiveEndHour = hours[e.detail.value]"
+						>
+							<view class="pick-btn">{{ s.proactiveEndHour }}:00</view>
+						</picker>
+					</view>
+				</view>
+				<view class="time-mode-hint">仅在此时间段内 AI 会主动发消息，其余时间静默。</view>
+			</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">主动消息频率</text>
+					<view class="mode-btns">
+						<view class="mode-btn" :class="{ on: s.proactiveCustomSeconds <= 0 && s.proactiveLevel === 'low' }" @tap="s.proactiveCustomSeconds = 0; s.proactiveLevel = 'low'">低频</view>
+						<view class="mode-btn" :class="{ on: s.proactiveCustomSeconds <= 0 && s.proactiveLevel === 'medium' }" @tap="s.proactiveCustomSeconds = 0; s.proactiveLevel = 'medium'">中频</view>
+						<view class="mode-btn" :class="{ on: s.proactiveCustomSeconds <= 0 && s.proactiveLevel === 'high' }" @tap="s.proactiveCustomSeconds = 0; s.proactiveLevel = 'high'">高频</view>
+						<view class="mode-btn" :class="{ on: s.proactiveCustomSeconds > 0 }" @tap="s.proactiveCustomSeconds = s.proactiveCustomSeconds > 0 ? s.proactiveCustomSeconds : 30">自定义</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">低频 45~120 分钟｜中频 15~45 分钟｜高频 5~15 分钟，每次发消息后随机重排。填下方秒数则固定按该倒计时触发（便于调试快速验证）。</view>
+				<view class="field">
+					<text class="label">自定义倒计时（秒）</text>
+					<input class="input" type="number" v-model="s.proactiveCustomSeconds" placeholder="0 = 使用上方档位" />
+				</view>
+			</view>
+			<view class="time-mode">
+				<view class="time-mode-head">
+					<text class="label">调试</text>
+					<view class="mode-btns">
+						<view class="mode-btn test-btn" :class="{ disabled: debugging }" @tap="debugProactive">立即发送一条主动消息</view>
+					</view>
+				</view>
+				<view class="time-mode-hint">忽略时段/间隔，按当前表单配置立即请求模型返回一条主动消息（发送前自动保存设置）。</view>
+				<view class="time-mode-hint countdown">{{ countdown }}</view>
+			</view>
+		</view>
+
+		<view class="section">
 			<view class="sec-title">上下文压缩</view>
 			<view class="time-mode">
 				<view class="time-mode-head">
@@ -253,6 +320,7 @@
 	import { clearAllData, getBackgroundImage, saveBackgroundImage, removeBackgroundImage, getApiProfiles, saveApiProfile, deleteApiProfile } from '../../utils/storage.js'
 	import { getLogs, clearLogs as clearDebugLogs, addLog } from '../../utils/log.js'
 	import { TTS_VOICE_NAMES, ttsVoiceDesc, testTts as runTtsTest } from '../../utils/tts.js'
+	import { debugProactiveMessage, rearmProactive, getProactiveCountdown } from '../../utils/chat-proactive.js'
 
 	const TYPE_NAMES = { req: '请求', res: '响应', err: '错误', info: '信息' }
 
@@ -277,7 +345,12 @@
 					{ label: '60条', value: 60 },
 					{ label: '80条', value: 80 }
 				],
-				ttsVoiceNames: TTS_VOICE_NAMES
+				ttsVoiceNames: TTS_VOICE_NAMES,
+				// 拟真聊天
+				hours: Array.from({ length: 24 }, (_, i) => i), // 主动消息时段选择（0-23 时）
+				debugging: false, // 主动消息调试按钮请求中
+				countdown: '', // 下次主动消息倒计时文案（onShow 后每秒刷新）
+				_countdownTimer: null // 倒计时刷新定时器（非模板字段）
 			}
 		},
 		computed: {
@@ -309,8 +382,39 @@
 			this.bg = getBackgroundImage()
 			this.logs = getLogs()
 			this.presets = getApiProfiles()
+			// 拟真聊天：实时刷新主动消息倒计时（离开页面时停止）
+			this.updateCountdown()
+			if (this._countdownTimer) clearInterval(this._countdownTimer)
+			this._countdownTimer = setInterval(() => this.updateCountdown(), 1000)
+		},
+		onHide() {
+			if (this._countdownTimer) {
+				clearInterval(this._countdownTimer)
+				this._countdownTimer = null
+			}
 		},
 		methods: {
+			// ---- 拟真聊天 ----
+			// 主动消息倒计时展示：调度中显示剩余时长，未调度按开关/时间模式提示原因
+			updateCountdown() {
+				const ms = getProactiveCountdown()
+				if (ms === null) {
+					const s = this.s || getConversationSettings()
+					if (!s.proactiveEnabled) this.countdown = '未开启拟真聊天'
+					else if (s.timeMode !== 'real') this.countdown = '仅现实时间模式生效'
+					else this.countdown = '等待调度'
+				} else if (ms === 0) {
+					this.countdown = '即将发送主动消息…'
+				} else {
+					const total = Math.ceil(ms / 1000)
+					const h = Math.floor(total / 3600)
+					const m = Math.floor((total % 3600) / 60)
+					const sec = total % 60
+					this.countdown = h > 0
+						? `下次主动消息：${h} 小时 ${m} 分`
+						: `下次主动消息：${m} 分 ${String(sec).padStart(2, '0')} 秒`
+				}
+			},
 			// ---- 调试日志 ----
 			refreshLogs() {
 				this.logs = getLogs()
@@ -453,13 +557,40 @@
 					return
 				}
 				saveSettings(this.s)
+				// 拟真聊天：保存后立即按新设置重排调度（开关/时段/频率/自定义倒计时即时生效）
+				rearmProactive()
 				// saveSettings 写入当前会话的设置快照（含人格/情景时间），仅作用于当前对话
 				addLog(
 					'info',
 					'保存设置',
-					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval} · 最大请求次数=${this.s.maxRequestAttempts} · 语音阅读=${this.s.ttsEnabled ? '开(' + (this.s.ttsModel || '') + '/' + (this.s.ttsVoice || '') + ')' : '关'}`
+					`model=${this.s.model} · 人格=${this.s.personalityId} · 温度=${this.s.temperature} · 时间模式=${this.s.timeMode} · 压缩间隔=${this.s.compressInterval} · 最大请求次数=${this.s.maxRequestAttempts} · 语音阅读=${this.s.ttsEnabled ? '开(' + (this.s.ttsModel || '') + '/' + (this.s.ttsVoice || '') + ')' : '关'} · 拟真=${this.s.proactiveEnabled ? '开(时段' + this.s.proactiveStartHour + '-' + this.s.proactiveEndHour + ',' + (this.s.proactiveCustomSeconds > 0 ? '自定义' + this.s.proactiveCustomSeconds + '秒' : this.s.proactiveLevel + '档') + ')' : '关'}`
 				)
 				uni.showToast({ title: '已保存', icon: 'success' })
+			},
+			// ---- 拟真聊天调试 ----
+			// 立即请求模型返回一条主动消息（忽略时段/间隔门禁），使用当前表单配置（先保存再发），结果写入调试日志
+			async debugProactive() {
+				if (this.debugging) return
+				if (!this.s.apiKey.trim()) {
+					uni.showToast({ title: '请填写 API Key', icon: 'none' })
+					return
+				}
+				saveSettings(this.s) // 调试发送基于当前表单值（与 TTS 测试按钮一致，所见即所用）
+				rearmProactive() // 保存后立即按新设置重排，倒计时同步刷新
+				this.debugging = true
+				try {
+					const r = await debugProactiveMessage()
+					if (r && r.lines && r.lines.length) {
+						uni.showToast({ title: '已发送 ' + r.lines.length + ' 条', icon: 'success' })
+					} else {
+						uni.showToast({ title: '发送被跳过（请求进行中或未配置 API）', icon: 'none' })
+					}
+				} catch (e) {
+					uni.showToast({ title: (e && e.message) || '发送失败', icon: 'none' })
+				} finally {
+					this.debugging = false
+					this.logs = getLogs() // 刷新调试日志，立即展示本次主动消息的请求/响应/错误
+				}
 			},
 			chooseBg() {
 				uni.chooseImage({
@@ -579,11 +710,46 @@
 		color: #fff;
 	}
 
+	.test-btn {
+		border-color: #5b7cfa;
+		color: #5b7cfa;
+	}
+
+	.test-btn.disabled {
+		opacity: 0.5;
+	}
+
+	.proactive-window {
+		display: flex;
+		align-items: center;
+	}
+
+	.pick-btn {
+		padding: 8rpx 24rpx;
+		border-radius: 12rpx;
+		background: #fff;
+		border: 1rpx solid #e5e6eb;
+		font-size: 26rpx;
+		color: #333;
+	}
+
+	.window-sep {
+		margin: 0 16rpx;
+		color: #999;
+		font-size: 26rpx;
+	}
+
 	.time-mode-hint {
 		margin-top: 12rpx;
 		font-size: 22rpx;
 		color: #999;
 		line-height: 1.5;
+	}
+
+	.countdown {
+		color: #5b7cfa;
+		font-weight: 600;
+		font-size: 24rpx;
 	}
 
 	.providers {

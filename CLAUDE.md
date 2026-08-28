@@ -43,7 +43,8 @@
 │   ├── chat-state.js      # 聊天服务共享状态（memoryStore 单例 + 最近请求缓存，消除跨模块循环依赖）
 │   ├── chat-settings.js   # 聊天服务设置域（全局默认 + 会话设置快照 + 会话人格保存）
 │   ├── chat-conversations.js # 聊天服务会话域（新建/切换/删除/复制 + 历史展示/清空）
-│   └── chat-compress.js   # 聊天服务压缩域（上下文压缩）
+│   ├── chat-compress.js   # 聊天服务压缩域（上下文压缩）
+│   └── chat-proactive.js  # 聊天服务拟真聊天域（前台调度器 + 回前台补发 + 主动消息发送）
 └── scripts/
     ├── test-memory.mjs    # 记忆核心逻辑断言测试
     └── test-emojis.mjs    # 表情包逻辑断言测试
@@ -112,6 +113,17 @@
 - `buildSystemPrompt` 注入「用户当前情景」+「情景变化」序列，帮助 LLM 理解情景过渡、衔接更流畅
 - 提示词见 `prompts.js` 的 `SCENE_GUIDE` 与 `buildNowText`
 - **时间模式**（设置项 `timeMode`）：`real` 现实时间（默认）注入 `buildNowText()` 供情景判断；`virtual` 虚拟时间不发送真实时间，情景由 LLM 自由想象（适合角色扮演）
+
+### 拟真聊天（utils/chat-proactive.js + prompts.js + chat.js）
+
+- **定位**：模拟真人发消息——AI 在随机时间节点主动给用户发消息，每条 ≤1 句、连续表情 ≤2；仅当前会话 `proactiveEnabled=true` 且 `timeMode=real`（现实时间）时生效
+- **设置项**（随会话快照）：`proactiveEnabled`（默认关）/ `proactiveStartHour`/`proactiveEndHour`（时段窗口，默认 9-23）/ `proactiveLevel`（频率档位 `low` 45~120min / `medium` 15~45min / `high` 5~15min）/ `proactiveCustomSeconds`（调试用自定义倒计时秒数，>0 时固定按该秒数重排并覆盖档位，下限 10s 防误触 API，清 0 恢复档位）
+- **调度（低后台占用）**：单条链式 `setTimeout`（非轮询，空闲零唤醒），`_dueAt` 记录下次触发时刻；**退后台不清定时器**——单条 pending timeout 后台零 CPU，H5 隐藏标签页被浏览器节流后仍会触发，App 后台 JS 挂起不触发时由回前台 `catchUpProactive()` 检测到期补发；App/聊天页 `onShow`、切换会话、保存设置后调用 `catchUpProactive()` 让调度立即按最新会话设置重排；**改设置/切会话用 `rearmProactive()` 强制重算**（`catchUp` 在定时器已挂载时跳过重排以保持跨页倒计时不重置，故"修改倒计时值立即生效"须走 `rearmProactive`——设置页保存/调试按钮、聊天页新对话/切换会话均用后者）；**重排只看功能开关（`_featureOn`：开关+现实时间+API 配置），与 loading 抑制解耦**——抑制只拦截到期发送、不拦截重排，任何时序下调度器都不会失效（曾因抑制期间到期不重排导致"等待调度"、只能重启恢复）；`catchUpProactive` 补发时先清旧定时器（`_tick` 也以 `_dueAt` 非空为触发前提）防重复发送；`_nextDelay` 恒 ≥60s（时段外等窗口起点，含"当前小时=起点"边界）防 0 延迟忙循环；`getProactiveCountdown()` 返回下次触发倒计时（毫秒，未调度返回 null）供设置页实时显示；每次重排写一条 `拟真聊天调度` info 日志（含倒计时与档位）
+- **触发门禁**（`sendProactiveBurst`，非调试）：开关 + 现实时间 + 未抑制（聊天页 loading 时 `setProactiveSuppressed(true)` 抑制）+ 时段窗口内 + 会话已有用户消息 + 距上条用户消息 < 60 分钟（`IDLE_CUTOFF_MS`，超时视为用户已离开不打扰）
+- **发送链路**：组装 system（`buildSystemPrompt` 传 `proactive=true` 注入 `PROACTIVE_GUIDE`）+ 最近 15 条历史 + 末尾追加**内部指令行**（仅请求不落库，让模型以"主动开口"方式输出）→ `chatCompletion` → `parseAndValidateReply(text, {proactive:true})` 校验（每条 ≤1 句、连续表情 ≤2，不合格自动重试 `maxRequestAttempts`）→ 按换行拆多条 `addChatRow('assistant', ...)` 落库（rollback 挂最后一行）→ Scene/Memory 由校验写入 → `maybeCompress` + 维护 → `uni.$emit('proactive-burst')` 通知聊天页刷新
+- **格式约束范围**：开启后**该对话所有回复**（含普通回复）均受"每条 ≤1 句、连续表情 ≤2"约束（决策点 1）；`countSentences` 按句末标点 `。！？!?…` 计句、连续标点合并（如"哈哈。。"=1）；`sendMessage` 对拟真会话按换行拆多条气泡落库并返回 `burst` 数组供聊天页逐条展示
+- **调试按钮**：设置页「立即发送一条主动消息」→ `debugProactiveMessage()`（`force` 忽略开关/时段/空闲/抑制门禁，仅校验 API 配置），结果写入调试日志
+- **重新生成兼容**：`popLastAssistant` 移除用户消息后**连续 assistant 行**（burst 一并移除，rollback 取最后一行），兼容单行与旧数据
 
 ### 表情包系统（utils/emojis.js + 聊天页）
 
