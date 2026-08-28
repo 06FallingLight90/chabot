@@ -16,6 +16,7 @@ Memory system inspiration: <https://github.com/Koishi007/koishi-ai-pet>
 - **Memory management**: filter / create / edit content, priority & level / **multi-select batch delete**
 - **Export chat**: one-tap export of the current conversation to `.txt` (download on H5, save to app documents on App, copy to clipboard on Mini Program)
 - **Message voice reading (TTS)**: optional; new LLM replies are synthesized and played automatically on render (Qwen-TTS by default; API key / model / voice configurable). Only text is read — emoji placeholders are skipped; audio is never saved to disk and is destroyed after one playback; a one-tap interface test is available in Settings
+- **Realistic proactive chat**: mimics a real person texting — works only in **Real-time** scene mode; the AI proactively messages you at random moments (≤1 sentence per message, ≤2 consecutive emojis, multiple messages split into separate bubbles). Configurable active time window and frequency level (low / medium / high), plus a custom countdown (seconds) for debugging; the Settings page shows a live countdown to the next message and a one-tap "send a proactive message now" debug button. Foreground single-timer scheduling + on-resume catch-up, zero polling in background
 - **Chat UX**: chat background image, jump-to-bottom button, side slider for quick scrolling, regenerate last AI reply
 
 ## 🛠 Tech Stack
@@ -63,6 +64,7 @@ See [CLAUDE.md](CLAUDE.md) for details.
 │   ├── chat-settings.js   # Settings domain (global defaults + per-conversation snapshot)
 │   ├── chat-conversations.js # Conversation domain (create/switch/delete/copy + history)
 │   ├── chat-compress.js   # Context compression domain
+│   ├── chat-proactive.js  # Realistic proactive chat domain (foreground scheduler + catch-up + send)
 │   ├── llm.js             # OpenAI-compatible LLM client (streaming & thinking control, logging)
 │   ├── tts.js             # TTS voice reading (Qwen-TTS synthesis + playback + interface test)
 │   ├── log.js             # Debug log ring buffer
@@ -76,7 +78,7 @@ See [CLAUDE.md](CLAUDE.md) for details.
 npm test
 ```
 
-Runs in Node with a mocked `uni` store, covering memory parsing, dedup & merge, recall cooldown, retrieval injection, conversation management, context compression, debug logs, API presets, thinking mode, per-conversation personas, export text and more — 110+ assertions.
+Runs in Node with a mocked `uni` store, covering memory parsing, dedup & merge, recall cooldown, retrieval injection, conversation management, context compression, debug logs, API presets, thinking mode, per-conversation personas, export text, proactive-chat scheduling and more — 140+ assertions.
 
 ## 📄 Docs
 
