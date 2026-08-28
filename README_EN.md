@@ -1,23 +1,84 @@
-# AI Buddy (AI 伙伴)
+<p align="center">
+  <img src="static/logo.png" width="140" alt="AI Buddy Logo" />
+</p>
 
-A lightweight LLM persona chat app built with **uni-app (Vue 3)**. **No backend, fully on-device** — it calls any **OpenAI-compatible** `/chat/completions` endpoint (including **Ollama** local models) and runs across **App / H5 / WeChat Mini Program**.
+<h1 align="center">🤖 AI Buddy (AI 伙伴)</h1>
 
-Memory system inspiration: <https://github.com/Koishi007/koishi-ai-pet>
+<p align="center">
+  A lightweight LLM persona chat app built with <b>uni-app (Vue 3)</b> — <b>no backend, fully on-device</b>. It calls any <b>OpenAI-compatible</b> <code>/chat/completions</code> endpoint (including <b>Ollama</b> local models) and runs across <b>App / H5 / WeChat Mini Program</b>.
+</p>
 
-## ✨ Features
+<p align="center">
+  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-App%20%7C%20H5%20%7C%20WeChat-blue" />
+  <img alt="Framework" src="https://img.shields.io/badge/Framework-uni--app%20Vue3-green" />
+  <img alt="Backend" src="https://img.shields.io/badge/Backend-None%20(On--device)-orange" />
+</p>
+
+> Memory system inspiration: [koishi-ai-pet](https://github.com/Koishi007/koishi-ai-pet)
+
+---
+
+## ✨ Core Highlights
+
+### 🧠 Memory Maintenance
+
+The AI doesn't just chat — it **remembers you**. A built-in "three-tier memory + LLM auto-write" mechanism gives the AI an ever-evolving long-term memory:
+
+- **L1 core facts / L2 situational memory (agreements & TODOs) / L3 temporary info**, graded by importance with half-life time decay
+- The LLM outputs `Memory:` lines to **add / modify / delete** memories on the fly — maintaining its understanding of you just like a real person
+- **Automatic recall & maintenance**: near-duplicate memories are auto-merged, stale ones are cleaned up, core facts are never forgotten
+- A dedicated Memory page lets you filter, create, edit, and batch-delete manually
+
+### 😄 Emoji Support (No Image-Recognition Model Needed)
+
+Custom emoji / stickers that just work — **no vision model required**:
+
+- Upload images and reference them with `$emoji-name$` placeholders; the LLM can sprinkle emojis into its replies on its own
+- **Pure text mapping**: the system simply injects the emoji list into the prompt and matches by name — no visual model to analyze image content, keeping it lightweight and cheap
+- Batch upload with per-image naming, long-press drag reordering, rename & delete; emojis and text render as separate segments in messages
+
+### 💬 Realistic Proactive Chat
+
+The AI reaches out to you like a real person instead of just waiting for replies:
+
+- Works only in **Real-time** scene mode; the AI **messages you at random moments**
+- **Realistic pacing**: ≤1 sentence per message, ≤2 consecutive emojis, multiple messages split into separate bubbles; it wraps up near the end of a topic with a short line or a single emoji
+- Configurable active time window and frequency level (low / medium / high), plus a custom countdown (seconds) for debugging
+- **Low background cost**: a single foreground timer + on-resume catch-up, zero polling in the background
+
+---
+
+## 🎯 User-Facing Features
 
 - **Persona chat**: 4 built-in personas (Gentle Big Sister / Energetic Junior / Koishi / Tsundere Catgirl) plus fully custom persona prompts; **each conversation has its own independent persona** — switch conversations to switch personas
-- **Memory system**: three tiers — L1 core facts / L2 situational memory (agreements & TODO list) / L3 temporary info; the LLM writes `Memory:` lines automatically, with **add / modify / delete** support, importance grading, half-life decay, and automatic recall & maintenance
-- **Scene tracking**: the LLM maintains the current scene each reply (`Scene:` line), with **real-time / virtual-time** modes; scene history is viewable and editable
-- **Context compression**: compress older context into a concise summary via the LLM; subsequent requests send only "summary + uncompressed tail" to cut token usage dramatically. Automatic (by message interval) or manual
 - **Multi-conversation history**: memories / personas / scenes / summaries stored per conversation; create, switch, delete, and **duplicate a conversation or its memories** into a new one
-- **Debug logs**: full request JSON, responses, errors and key operations, expandable to full content, clearable in one tap
-- **API profiles**: up to **3 saved API presets** for quick switching; a **Thinking Mode** toggle fixes "empty reply" issues with Ollama reasoning models such as Qwen3 (`reasoning_effort`)
+- **Scene tracking**: the LLM maintains the current scene each reply (`Scene:` line), with **real-time / virtual-time** modes; scene history is viewable and editable
+- **Context compression**: older context is summarized by the LLM; later requests send only "summary + uncompressed tail" to cut token usage dramatically. Automatic (by message interval) or manual
+- **Emoji management**: batch upload with per-image naming, drag reordering, rename & delete; emojis and text render as separate segments
+- **Realistic proactive chat**: see the Core Highlights above — pick your window, frequency and debug countdown, or one-tap "send a proactive message now"
+- **Message voice reading (TTS)**: optional; new LLM replies are synthesized and played automatically on render (Qwen-TTS by default; API key / model / voice configurable). Only text is read — emojis are skipped; audio is never saved to disk and is destroyed after one playback; a one-tap interface test is available in Settings
 - **Memory management**: filter / create / edit content, priority & level / **multi-select batch delete**
 - **Export chat**: one-tap export of the current conversation to `.txt` (download on H5, save to app documents on App, copy to clipboard on Mini Program)
-- **Message voice reading (TTS)**: optional; new LLM replies are synthesized and played automatically on render (Qwen-TTS by default; API key / model / voice configurable). Only text is read — emoji placeholders are skipped; audio is never saved to disk and is destroyed after one playback; a one-tap interface test is available in Settings
-- **Realistic proactive chat**: mimics a real person texting — works only in **Real-time** scene mode; the AI proactively messages you at random moments (≤1 sentence per message, ≤2 consecutive emojis, multiple messages split into separate bubbles). Configurable active time window and frequency level (low / medium / high), plus a custom countdown (seconds) for debugging; the Settings page shows a live countdown to the next message and a one-tap "send a proactive message now" debug button. Foreground single-timer scheduling + on-resume catch-up, zero polling in background
-- **Chat UX**: chat background image, jump-to-bottom button, side slider for quick scrolling, regenerate last AI reply
+- **Chat UX**: chat background image, jump-to-bottom button, side slider for quick scrolling, regenerate the last AI reply
+
+## 🧑‍💻 Developer-Facing Features
+
+- **On-device, zero backend**: all data stays on your device, no cloud sync; **no third-party npm dependency**, `package.json` is only used for `npm test`
+- **Reliable cross-platform persistence**: unified `uni.setStorageSync`, works on App / H5 / Mini Program and survives restarts
+- **Modular chat service**: `chat.js` is only a facade, split into 5 domains (state / settings / conversations / compress / proactive) that eliminate circular dependencies while keeping call entry points unchanged
+- **Memory algorithm engine**: character bigram Jaccard + LCS dual-similarity dedup, half-life decay, layered retrieval & capacity governance, recall cooldown (`memory.js`)
+- **LLM compatibility layer**: OpenAI-compatible client with Ollama support; built-in **thinking-mode fallback** (`reasoning_effort` with cascading fallback + `reasoning`/`thinking` field fallback) — a three-layer fix for Qwen3-style "request succeeds but reply is empty"
+- **Debug log instrumentation**: a ring buffer records every request / response / error / key operation, expandable to full content and clearable in one tap
+- **Unit-test coverage**: `npm test` runs in Node with a mocked `uni`, 140+ assertions on core logic
+- **API profiles**: up to **3 saved API presets** for quick switching; the **Thinking Mode** toggle fixes empty replies with Ollama reasoning models
+
+### Context Compression Mechanism
+
+- Automatic (by `compressInterval` message count) or manual trigger
+- Compresses everything since the last progress point, keeping the most recent 10 messages; chunks are processed in batches of 80 with summaries merged incrementally to avoid oversized requests
+- The summary is stored in the conversation and injected into the system message ("conversation so far"); original messages remain fully intact for browsing
+
+---
 
 ## 🛠 Tech Stack
 
@@ -49,6 +110,7 @@ See [CLAUDE.md](CLAUDE.md) for details.
 ```
 ├── App.vue                # Storage init + memory maintenance on launch
 ├── pages.json             # Page registration + tabBar (Chat / Memory / Settings)
+├── static/logo.png        # Project logo
 ├── pages/
 │   ├── chat/
 │   │   ├── chat.vue          # Chat page skeleton (holds session state, coordinates children)
@@ -89,4 +151,4 @@ Runs in Node with a mocked `uni` store, covering memory parsing, dedup & merge, 
 
 - WeChat Mini Program requires configuring **request legal domains** in the MP admin console (App works as long as it's online); when voice reading is enabled, also add the TTS API domain (e.g. `dashscope.aliyuncs.com`) to the legal domains
 - All data stays on your device; no cloud sync
-
+- On App grant storage permission at first launch; H5 runs directly in the browser with no extra setup
