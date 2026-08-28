@@ -91,9 +91,11 @@ function _lastUserAt() {
 	return 0
 }
 
-/** 当前时刻是否在主动消息时段窗口内（闭区间 [start, end]：end 取整点含该小时，故 end=23 覆盖 23:00~23:59） */
+/** 当前时刻是否在主动消息时段窗口内（分钟级，闭区间 [start, end]，start/end 为当天第几分钟 0-1439） */
 function _inWindow(s) {
-	return new Date().getHours() >= s.proactiveStartHour && new Date().getHours() <= s.proactiveEndHour
+	const d = new Date()
+	const min = d.getHours() * 60 + d.getMinutes()
+	return min >= s.proactiveStartMin && min <= s.proactiveEndMin
 }
 
 /** 到期触发门禁（非调试）：时段窗口 + 已有用户消息 + 未超空闲冷却 */
@@ -111,19 +113,19 @@ function _nextDelay(s) {
 	const custom = parseInt(s && s.proactiveCustomSeconds, 10) || 0
 	if (custom > 0) return Math.max(10000, custom * 1000)
 	const d = new Date()
-	const h = d.getHours()
-	const [min, max] = LEVEL_RANGES[s.proactiveLevel] || LEVEL_RANGES.medium
-	const toStart = (targetHour) => {
-		// 从当前时刻算起到 targetHour 整点的毫秒数（同小时时为负，代表"已过该点"）
-		return (targetHour - h) * 3600000 - d.getMinutes() * 60000 - d.getSeconds() * 1000 - d.getMilliseconds()
+	const min = d.getHours() * 60 + d.getMinutes()
+	const [lo, hi] = LEVEL_RANGES[s.proactiveLevel] || LEVEL_RANGES.medium
+	const toStart = (targetMin) => {
+		// 从当前时刻算起到 targetMin 这一分钟开头的毫秒数（同分钟时为负，代表"已过该点"）
+		return (targetMin - min) * 60000 - d.getSeconds() * 1000 - d.getMilliseconds()
 	}
-	if (h < s.proactiveStartHour) {
-		return Math.max(60000, toStart(s.proactiveStartHour))
+	if (min < s.proactiveStartMin) {
+		return Math.max(60000, toStart(s.proactiveStartMin))
 	}
-	if (h > s.proactiveEndHour) {
-		return Math.max(60000, toStart(s.proactiveStartHour + 24))
+	if (min > s.proactiveEndMin) {
+		return Math.max(60000, toStart(s.proactiveStartMin + 1440))
 	}
-	return Math.max(60000, (min + Math.random() * (max - min)) * 60000)
+	return Math.max(60000, (lo + Math.random() * (hi - lo)) * 60000)
 }
 
 // ---------- 调度器 ----------

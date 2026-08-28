@@ -701,7 +701,7 @@ assert(pv.ok === true, '非拟真模式不受一句话约束')
 chat.saveSettings({
 	baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-test',
 	temperature: 0.8, personalityId: 'gentle', customPrompt: '', timeMode: 'real',
-	proactiveEnabled: true, proactiveStartHour: 0, proactiveEndHour: 23, proactiveLevel: 'medium'
+	proactiveEnabled: true, proactiveStartMin: 0, proactiveEndMin: 1439, proactiveLevel: 'medium'
 })
 const pa = await import('../utils/chat-proactive.js')
 const rows24 = storage.getChatRows()

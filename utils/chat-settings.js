@@ -39,8 +39,8 @@ export function getSettings() {
 		ttsVoice: getSetting('ttsVoice', 'Cherry'),
 		// 拟真聊天：仅现实时间模式生效；AI 在随机时间主动发消息（每条 ≤1 句、连续表情 ≤2）
 		proactiveEnabled: getSetting('proactiveEnabled', false),
-		proactiveStartHour: getSetting('proactiveStartHour', 9), // 主动消息时段起（时）
-		proactiveEndHour: getSetting('proactiveEndHour', 23), // 主动消息时段止（时）
+		proactiveStartMin: getSetting('proactiveStartMin', 9 * 60), // 主动消息时段起（当天第几分钟 0-1439，默认 09:00）
+		proactiveEndMin: getSetting('proactiveEndMin', 23 * 60 + 59), // 主动消息时段止（当天第几分钟 0-1439，默认 23:59）
 		proactiveLevel: getSetting('proactiveLevel', 'medium'), // 频率档位 low/medium/high
 		proactiveCustomSeconds: parseInt(getSetting('proactiveCustomSeconds', '0'), 10) || 0, // 调试：自定义倒计时（秒），>0 时覆盖档位
 		bubbleOpacity: (() => {
@@ -69,15 +69,15 @@ export function normalizeSettings(s) {
 		ttsApiKey: String(s && s.ttsApiKey ? s.ttsApiKey : '').trim(),
 		ttsModel: String(s && s.ttsModel ? s.ttsModel : '').trim() || 'qwen3-tts-flash',
 		ttsVoice: String(s && s.ttsVoice ? s.ttsVoice : '').trim() || 'Cherry',
-		// 拟真聊天：开关默认关；时段钳制在 0-23；档位白名单
+		// 拟真聊天：开关默认关；时段为分钟级（当天第几分钟 0-1439，默认 09:00-23:59）；档位白名单
 		proactiveEnabled: !!s && s.proactiveEnabled === true,
-		proactiveStartHour: (() => {
-			const n = parseInt(s && s.proactiveStartHour, 10)
-			return Number.isNaN(n) ? 9 : Math.max(0, Math.min(23, n))
+		proactiveStartMin: (() => {
+			const n = parseInt(s && s.proactiveStartMin, 10)
+			return Number.isNaN(n) ? 9 * 60 : Math.max(0, Math.min(1439, n))
 		})(),
-		proactiveEndHour: (() => {
-			const n = parseInt(s && s.proactiveEndHour, 10)
-			return Number.isNaN(n) ? 23 : Math.max(0, Math.min(23, n))
+		proactiveEndMin: (() => {
+			const n = parseInt(s && s.proactiveEndMin, 10)
+			return Number.isNaN(n) ? 23 * 60 + 59 : Math.max(0, Math.min(1439, n))
 		})(),
 		proactiveLevel: ['low', 'medium', 'high'].includes(s && s.proactiveLevel) ? s.proactiveLevel : 'medium',
 		// 自定义倒计时（秒）：0=用档位；钳制在 0-3600，供调试快速触发

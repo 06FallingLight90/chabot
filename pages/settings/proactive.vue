@@ -19,25 +19,23 @@
 					<text class="ss-label" style="margin-bottom: 0">主动消息时段</text>
 					<view class="proactive-window">
 						<picker
-							mode="selector"
-							:range="hours"
-							:value="hours.indexOf(s.proactiveStartHour)"
-							@change="(e) => s.proactiveStartHour = hours[e.detail.value]"
+							mode="time"
+							:value="minToTime(s.proactiveStartMin)"
+							@change="(e) => s.proactiveStartMin = timeToMin(e.detail.value)"
 						>
-							<view class="pick-btn">{{ s.proactiveStartHour }}:00</view>
+							<view class="pick-btn">{{ minToTime(s.proactiveStartMin) }}</view>
 						</picker>
 						<text class="window-sep">—</text>
 						<picker
-							mode="selector"
-							:range="hours"
-							:value="hours.indexOf(s.proactiveEndHour)"
-							@change="(e) => s.proactiveEndHour = hours[e.detail.value]"
+							mode="time"
+							:value="minToTime(s.proactiveEndMin)"
+							@change="(e) => s.proactiveEndMin = timeToMin(e.detail.value)"
 						>
-							<view class="pick-btn">{{ s.proactiveEndHour }}:00</view>
+							<view class="pick-btn">{{ minToTime(s.proactiveEndMin) }}</view>
 						</picker>
 					</view>
 				</view>
-				<view class="ss-hint">仅在此时间段内 AI 会主动发消息，其余时间静默。</view>
+				<view class="ss-hint">仅在此时间段内 AI 会主动发消息（精确到分钟），其余时间静默。</view>
 			</view>
 			<view class="ss-row">
 				<view class="ss-row-head">
@@ -80,7 +78,6 @@
 		data() {
 			return {
 				s: getConversationSettings(),
-				hours: Array.from({ length: 24 }, (_, i) => i),
 				debugging: false,
 				countdown: '',
 				_countdownTimer: null
@@ -102,6 +99,20 @@
 			setLevel(lv) {
 				this.s.proactiveCustomSeconds = 0
 				this.s.proactiveLevel = lv
+			},
+			// 分钟 → "HH:MM"（钳制 0-1439，非法归 0）
+			minToTime(min) {
+				const m = Math.max(0, Math.min(1439, parseInt(min, 10) || 0))
+				const h = Math.floor(m / 60)
+				const mm = m % 60
+				return (h < 10 ? '0' + h : '' + h) + ':' + (mm < 10 ? '0' + mm : '' + mm)
+			},
+			// "HH:MM" → 当天第几分钟（0-1439）
+			timeToMin(str) {
+				const p = String(str || '').split(':')
+				const h = parseInt(p[0], 10) || 0
+				const mm = parseInt(p[1], 10) || 0
+				return Math.max(0, Math.min(1439, h * 60 + mm))
 			},
 			updateCountdown() {
 				const ms = getProactiveCountdown()
@@ -154,7 +165,7 @@
 				addLog(
 					'info',
 					'保存设置',
-					`拟真=${this.s.proactiveEnabled ? '开(时段' + this.s.proactiveStartHour + '-' + this.s.proactiveEndHour + ',' + (this.s.proactiveCustomSeconds > 0 ? '自定义' + this.s.proactiveCustomSeconds + '秒' : this.s.proactiveLevel + '档') + ')' : '关'}`
+					`拟真=${this.s.proactiveEnabled ? '开(时段' + this.minToTime(this.s.proactiveStartMin) + '-' + this.minToTime(this.s.proactiveEndMin) + ',' + (this.s.proactiveCustomSeconds > 0 ? '自定义' + this.s.proactiveCustomSeconds + '秒' : this.s.proactiveLevel + '档') + ')' : '关'}`
 				)
 				uni.showToast({ title: '已保存', icon: 'success' })
 			}
