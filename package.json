@@ -5,5 +5,9 @@
 	"type": "module",
 	"scripts": {
 		"test": "node scripts/test-memory.mjs && node scripts/test-emojis.mjs"
+	},
+	"dependencies": {
+		"sass": "^1.78.0",
+		"wot-design-uni": "^1.14.0"
 	}
 }

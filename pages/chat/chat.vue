@@ -1,5 +1,5 @@
 <template>
-	<view class="page">
+	<view class="page" :class="themeClass">
 		<chat-header
 			:persona-name="personaName"
 			:model="model"
@@ -20,6 +20,7 @@
 				:persona-name="personaName"
 				:bg="bg"
 				:emojis="emojis"
+				:bubble-opacity="bubbleOpacity"
 				@regenerate="doRegenerate"
 			/>
 		</view>
@@ -32,6 +33,9 @@
 			@toggle-emoji="toggleEmojiPanel"
 			@focus="onInputFocus"
 		/>
+
+		<!-- 自定义底部导航栏 -->
+		<custom-tab-bar :active="0" />
 
 		<chat-emoji-panel
 			:open="showEmojiPanel"
@@ -83,6 +87,7 @@
 				showPersona: false,    // 会话人格弹窗
 				showEmojiPanel: false, // 表情栏展开状态
 				emojis: [],            // 全局表情列表（表情栏与消息渲染共用）
+				bubbleOpacity: 1,          // 气泡背景不透明度（会话设置，0.2~1）
 				pendingClosePanel: false, // 表情栏打开时点了输入框，等键盘弹出后再关闭（非模板字段）
 				kbH: 0,                // 键盘高度（px，App/小程序经 onKeyboardHeightChange 监听）
 				_unloaded: false,      // 页面卸载标记（非模板字段）
@@ -137,6 +142,7 @@
 				const s = getConversationSettings()
 				this.personaName = s.personaName
 				this.model = s.model
+				this.bubbleOpacity = s.bubbleOpacity
 			},
 			// ---- 表情包 ----
 			refreshEmojis() {
@@ -363,7 +369,10 @@
 		height: 100vh;
 		display: flex;
 		flex-direction: column;
-		background: #f7f8fa;
+		background: var(--c-bg);
+		box-sizing: border-box;
+		/* 底部为自绘 tabBar，预留其高度，避免输入栏被遮挡 */
+		padding-bottom: calc(var(--ctab-h, 112rpx) + env(safe-area-inset-bottom));
 	}
 
 	.msg-wrap {

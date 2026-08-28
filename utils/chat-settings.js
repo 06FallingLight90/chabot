@@ -43,6 +43,10 @@ export function getSettings() {
 		proactiveEndHour: getSetting('proactiveEndHour', 23), // 主动消息时段止（时）
 		proactiveLevel: getSetting('proactiveLevel', 'medium'), // 频率档位 low/medium/high
 		proactiveCustomSeconds: parseInt(getSetting('proactiveCustomSeconds', '0'), 10) || 0, // 调试：自定义倒计时（秒），>0 时覆盖档位
+		bubbleOpacity: (() => {
+			const n = parseFloat(getSetting('bubbleOpacity', '1'))
+			return Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1
+		})(), // 聊天气泡背景不透明度 0.2~1（1=不透明）
 		personaName: getPersonaName(personalityId)
 	}
 }
@@ -80,6 +84,11 @@ export function normalizeSettings(s) {
 		proactiveCustomSeconds: (() => {
 			const n = parseInt(s && s.proactiveCustomSeconds, 10)
 			return Number.isNaN(n) ? 0 : Math.max(0, Math.min(3600, n))
+		})(),
+		// 聊天气泡背景不透明度：钳制 0.2~1，1=完全不透明
+		bubbleOpacity: (() => {
+			const n = parseFloat(s && s.bubbleOpacity)
+			return Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1
 		})()
 	}
 }

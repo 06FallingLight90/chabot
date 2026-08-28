@@ -253,8 +253,8 @@
 		max-height: 0;
 		opacity: 0;
 		transition: max-height 0.25s ease, opacity 0.25s ease;
-		background: #ffffff;
-		border-top: 1rpx solid #eee;
+		background: var(--c-card);
+		border-top: 1rpx solid var(--c-line);
 	}
 
 	.emoji-panel.panel-open {
@@ -278,7 +278,7 @@
 		padding: 48rpx 0;
 		text-align: center;
 		font-size: 24rpx;
-		color: #bbb;
+		color: var(--c-text-aid);
 	}
 
 	.emoji-item {
@@ -304,7 +304,7 @@
 	.emoji-name {
 		margin-top: 8rpx;
 		font-size: 20rpx;
-		color: #999;
+		color: var(--c-text-secondary);
 		max-width: 100%;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -313,7 +313,7 @@
 
 	.emoji-tools {
 		display: flex;
-		border-top: 1rpx solid #eee;
+		border-top: 1rpx solid var(--c-line);
 	}
 
 	.emoji-tool {
@@ -321,17 +321,18 @@
 		text-align: center;
 		padding: 20rpx 0;
 		font-size: 26rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 	}
 
 	.emoji-tool + .emoji-tool {
-		border-left: 1rpx solid #eee;
+		border-left: 1rpx solid var(--c-line);
 	}
 
 	.emoji-name-input {
 		width: 100%;
 		height: 76rpx;
-		background: #f2f3f5;
+		background: var(--c-bg);
+		color: var(--c-text);
 		border-radius: 12rpx;
 		padding: 0 24rpx;
 		box-sizing: border-box;
@@ -365,7 +366,7 @@
 
 	.edit-panel {
 		width: 640rpx;
-		background: #fff;
+		background: var(--c-card);
 		border-radius: 20rpx;
 		padding: 32rpx;
 		box-sizing: border-box;
@@ -374,7 +375,7 @@
 	.edit-title {
 		font-size: 32rpx;
 		font-weight: 600;
-		color: #333;
+		color: var(--c-text);
 		text-align: center;
 		margin-bottom: 24rpx;
 	}
@@ -394,12 +395,12 @@
 	}
 
 	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.edit-btn.ok {
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-primary);
 	}
 </style>

@@ -1,4 +1,10 @@
 {
+	"easycom": {
+		"autoscan": true,
+		"custom": {
+			"^wd-(.*)": "wot-design-uni/components/wd-$1/wd-$1.vue"
+		}
+	},
 	"pages": [
 		{
 			"path": "pages/chat/chat",
@@ -26,19 +32,81 @@
 			"style": {
 				"navigationBarTitleText": "设置"
 			}
+		},
+		{
+			"path": "pages/settings/appearance",
+			"style": {
+				"navigationBarTitleText": "界面外观"
+			}
+		},
+		{
+			"path": "pages/settings/api",
+			"style": {
+				"navigationBarTitleText": "接口配置"
+			}
+		},
+		{
+			"path": "pages/settings/persona",
+			"style": {
+				"navigationBarTitleText": "人格配置"
+			}
+		},
+		{
+			"path": "pages/settings/proactive",
+			"style": {
+				"navigationBarTitleText": "拟真聊天"
+			}
+		},
+		{
+			"path": "pages/settings/tts",
+			"style": {
+				"navigationBarTitleText": "语音阅读"
+			}
+		},
+		{
+			"path": "pages/settings/compress",
+			"style": {
+				"navigationBarTitleText": "上下文压缩"
+			}
+		},
+		{
+			"path": "pages/settings/data",
+			"style": {
+				"navigationBarTitleText": "数据管理"
+			}
+		},
+		{
+			"path": "pages/settings/logs",
+			"style": {
+				"navigationBarTitleText": "调试日志"
+			}
+		},
+		{
+			"path": "pages/settings/help",
+			"style": {
+				"navigationBarTitleText": "帮助"
+			}
+		},
+		{
+			"path": "pages/settings/about",
+			"style": {
+				"navigationBarTitleText": "关于"
+			}
 		}
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
 		"navigationBarTitleText": "AI 伙伴",
 		"navigationBarBackgroundColor": "#F8F8F8",
-		"backgroundColor": "#F8F8F8"
+		"backgroundColor": "#F6F7FB",
+		"backgroundTextStyle": "dark"
 	},
 	"tabBar": {
-		"color": "#999999",
+		"custom": true,
+		"color": "#9aa0a8",
 		"selectedColor": "#5B7CFA",
 		"backgroundColor": "#ffffff",
-		"borderStyle": "black",
+		"borderStyle": "white",
 		"list": [
 			{
 				"pagePath": "pages/chat/chat",

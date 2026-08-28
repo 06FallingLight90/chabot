@@ -128,7 +128,7 @@
 
 	.persona-panel {
 		width: 640rpx;
-		background: #fff;
+		background: var(--c-card);
 		border-radius: 20rpx;
 		padding: 32rpx;
 		box-sizing: border-box;
@@ -137,14 +137,14 @@
 	.edit-title {
 		font-size: 32rpx;
 		font-weight: 600;
-		color: #333;
+		color: var(--c-text);
 		text-align: center;
 		margin-bottom: 24rpx;
 	}
 
 	.persona-hint {
 		font-size: 22rpx;
-		color: #999;
+		color: var(--c-text-aid);
 		text-align: center;
 		margin-bottom: 20rpx;
 	}
@@ -156,25 +156,25 @@
 	.persona-item {
 		padding: 18rpx 24rpx;
 		border-radius: 12rpx;
-		background: #f7f8fa;
+		background: var(--c-bg);
 		margin-bottom: 16rpx;
 		border: 2rpx solid transparent;
 	}
 
 	.persona-item.active {
-		border-color: #5b7cfa;
-		background: #eef1fe;
+		border-color: var(--c-primary);
+		background: var(--c-primary-light);
 	}
 
 	.persona-item-name {
 		font-size: 28rpx;
-		color: #333;
+		color: var(--c-text);
 		font-weight: 500;
 	}
 
 	.persona-item-desc {
 		font-size: 22rpx;
-		color: #999;
+		color: var(--c-text-aid);
 		margin-top: 4rpx;
 	}
 
@@ -193,17 +193,17 @@
 		margin-left: 16rpx;
 		padding-top: 2rpx;
 		font-size: 22rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 	}
 
 	.persona-item-prompt {
 		margin-top: 14rpx;
 		padding: 16rpx;
-		background: #fff;
+		background: var(--c-card);
 		border-radius: 10rpx;
-		border: 1rpx solid #e5e6eb;
+		border: 1rpx solid var(--c-line);
 		font-size: 22rpx;
-		color: #666;
+		color: var(--c-text-secondary);
 		line-height: 1.7;
 		white-space: pre-wrap;
 		word-break: break-word;
@@ -213,8 +213,8 @@
 		margin-top: 14rpx;
 		display: inline-block;
 		font-size: 22rpx;
-		color: #5b7cfa;
-		border: 1rpx solid #5b7cfa;
+		color: var(--c-primary);
+		border: 1rpx solid var(--c-primary);
 		border-radius: 22rpx;
 		padding: 6rpx 20rpx;
 	}
@@ -222,7 +222,8 @@
 	.persona-custom {
 		width: 100%;
 		height: 260rpx;
-		background: #f7f8fa;
+		background: var(--c-bg);
+		color: var(--c-text);
 		border-radius: 12rpx;
 		padding: 20rpx;
 		box-sizing: border-box;
@@ -246,12 +247,12 @@
 	}
 
 	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.edit-btn.ok {
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-primary);
 	}
 </style>

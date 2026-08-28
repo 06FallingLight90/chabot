@@ -82,7 +82,7 @@
 
 	.edit-panel {
 		width: 640rpx;
-		background: #fff;
+		background: var(--c-card);
 		border-radius: 20rpx;
 		padding: 32rpx;
 		box-sizing: border-box;
@@ -91,7 +91,7 @@
 	.edit-title {
 		font-size: 32rpx;
 		font-weight: 600;
-		color: #333;
+		color: var(--c-text);
 		text-align: center;
 		margin-bottom: 24rpx;
 	}
@@ -99,7 +99,8 @@
 	.edit-area {
 		width: 100%;
 		height: 200rpx;
-		background: #f7f8fa;
+		background: var(--c-bg);
+		color: var(--c-text);
 		border-radius: 12rpx;
 		padding: 20rpx;
 		box-sizing: border-box;
@@ -113,7 +114,7 @@
 
 	.scene-history-head {
 		font-size: 22rpx;
-		color: #999;
+		color: var(--c-text-aid);
 		margin-bottom: 10rpx;
 	}
 
@@ -125,7 +126,7 @@
 		display: flex;
 		align-items: center;
 		padding: 14rpx 20rpx;
-		background: #f7f8fa;
+		background: var(--c-bg);
 		border-radius: 10rpx;
 		margin-bottom: 12rpx;
 	}
@@ -134,14 +135,14 @@
 		flex-shrink: 0;
 		width: 40rpx;
 		font-size: 22rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 	}
 
 	.scene-history-text {
 		flex: 1;
 		min-width: 0;
 		font-size: 24rpx;
-		color: #666;
+		color: var(--c-text-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -162,12 +163,12 @@
 	}
 
 	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.edit-btn.ok {
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-primary);
 	}
 </style>

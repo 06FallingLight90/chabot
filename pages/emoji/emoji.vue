@@ -1,12 +1,21 @@
 <template>
-	<view class="page">
+	<view class="page" :class="themeClass">
+		<view class="hero">
+			<view class="hero-title">表情包</view>
+			<view class="hero-sub">批量上传你的专属表情，对话中用「$名称$」引用</view>
+		</view>
+
 		<view class="toolbar">
 			<view class="count">共 {{ emojis.length }} 个表情</view>
-			<view class="tool-btn" @tap="startUpload">上传表情</view>
+			<view class="tool-btn accent" @tap="startUpload">＋ 上传表情</view>
 		</view>
 
 		<scroll-view scroll-y class="list">
-			<view v-if="!emojis.length" class="empty">暂无表情，点右上角「上传表情」添加</view>
+			<view v-if="!emojis.length" class="empty">
+				<text class="empty-emoji">😊</text>
+				<text class="empty-text">暂无表情</text>
+				<text class="empty-hint">点右上角「上传表情」逐张命名添加</text>
+			</view>
 			<view v-for="e in emojis" :key="e.id" class="card">
 				<image class="card-img" :src="e.src" mode="aspectFit" />
 				<view class="card-main">
@@ -159,55 +168,84 @@
 		height: 100vh;
 		display: flex;
 		flex-direction: column;
-		background: #f7f8fa;
+		background: var(--c-bg);
+	}
+
+	.hero {
+		padding: 40rpx 40rpx 8rpx;
+	}
+	.hero-title {
+		font-size: 44rpx;
+		font-weight: 700;
+		color: var(--c-text);
+		line-height: 1.3;
+	}
+	.hero-sub {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		color: var(--c-text-aid);
 	}
 
 	.toolbar {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 20rpx 30rpx;
-		background: #ffffff;
-		border-bottom: 1rpx solid #eee;
+		padding: 24rpx 40rpx 8rpx;
 	}
 
 	.count {
 		font-size: 26rpx;
-		color: #999;
+		color: var(--c-text-secondary);
 	}
 
 	.tool-btn {
 		font-size: 28rpx;
-		color: #5b7cfa;
-		padding: 8rpx 20rpx;
+		color: var(--c-primary);
+		padding: 10rpx 28rpx;
+		border-radius: var(--c-radius-full);
+		background: var(--c-primary-light);
+	}
+
+	.tool-btn.accent {
+		color: #fff;
+		background: var(--c-brand-gradient);
+		font-weight: 600;
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.3);
 	}
 
 	.list {
 		flex: 1;
+		padding: 8rpx 24rpx 40rpx;
+		box-sizing: border-box;
 	}
 
 	.empty {
-		padding: 160rpx 0;
-		text-align: center;
-		font-size: 26rpx;
-		color: #bbb;
+		margin-top: 160rpx;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
 	}
+	.empty-emoji { font-size: 88rpx; }
+	.empty-text { margin-top: 24rpx; font-size: 28rpx; color: var(--c-text-secondary); }
+	.empty-hint { margin-top: 8rpx; font-size: 24rpx; color: var(--c-text-aid); }
 
 	.card {
 		display: flex;
 		align-items: center;
-		margin: 20rpx 30rpx;
+		margin: 20rpx 16rpx;
 		padding: 20rpx;
-		background: #ffffff;
-		border-radius: 16rpx;
-		box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+		background: var(--c-card);
+		border-radius: var(--c-radius-lg);
+		box-shadow: var(--c-shadow-card);
+		border: 1rpx solid transparent;
 	}
 
 	.card-img {
 		width: 120rpx;
 		height: 120rpx;
-		border-radius: 12rpx;
+		border-radius: var(--c-radius-md);
 		flex-shrink: 0;
+		background: var(--c-bg);
 	}
 
 	.card-main {
@@ -220,7 +258,7 @@
 
 	.card-name {
 		font-size: 30rpx;
-		color: #333;
+		color: var(--c-text);
 		font-weight: 500;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -230,7 +268,7 @@
 	.card-time {
 		margin-top: 8rpx;
 		font-size: 22rpx;
-		color: #bbb;
+		color: var(--c-text-aid);
 	}
 
 	.card-ops {
@@ -241,13 +279,13 @@
 
 	.edit {
 		font-size: 26rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 		padding: 8rpx 16rpx;
 	}
 
 	.del {
 		font-size: 26rpx;
-		color: #f53f3f;
+		color: var(--c-danger);
 		padding: 8rpx 16rpx;
 	}
 
@@ -257,7 +295,7 @@
 		top: 0;
 		right: 0;
 		bottom: 0;
-		background: rgba(0, 0, 0, 0.45);
+		background: rgba(15, 18, 29, 0.45);
 		z-index: 999;
 		display: flex;
 		align-items: center;
@@ -266,45 +304,48 @@
 
 	.edit-panel {
 		width: 640rpx;
-		background: #fff;
-		border-radius: 20rpx;
-		padding: 32rpx;
+		background: var(--c-card);
+		border-radius: var(--c-radius-lg);
+		padding: 36rpx;
 		box-sizing: border-box;
+		box-shadow: var(--c-shadow-card);
 	}
 
 	.edit-title {
 		font-size: 32rpx;
 		font-weight: 600;
-		color: #333;
+		color: var(--c-text);
 		text-align: center;
-		margin-bottom: 24rpx;
+		margin-bottom: 28rpx;
 	}
 
 	.preview-wrap {
 		display: flex;
 		justify-content: center;
-		margin-bottom: 24rpx;
+		margin-bottom: 28rpx;
 	}
 
 	.preview-img {
 		width: 200rpx;
 		height: 200rpx;
-		border-radius: 12rpx;
+		border-radius: var(--c-radius-md);
+		background: var(--c-bg);
 	}
 
 	.name-input {
 		width: 100%;
 		height: 76rpx;
-		background: #f2f3f5;
-		border-radius: 12rpx;
+		background: var(--c-bg);
+		border-radius: var(--c-radius-md);
 		padding: 0 24rpx;
 		box-sizing: border-box;
 		font-size: 28rpx;
+		color: var(--c-text);
 	}
 
 	.edit-btns {
 		display: flex;
-		margin-top: 32rpx;
+		margin-top: 36rpx;
 	}
 
 	.edit-btn {
@@ -312,17 +353,18 @@
 		height: 80rpx;
 		line-height: 80rpx;
 		font-size: 28rpx;
-		border-radius: 40rpx;
+		border-radius: var(--c-radius-full);
 		margin: 0 10rpx;
 	}
 
 	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.edit-btn.ok {
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-brand-gradient);
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.3);
 	}
 </style>

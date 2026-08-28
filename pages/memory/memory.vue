@@ -1,5 +1,10 @@
 <template>
-	<view class="page">
+	<view class="page" :class="themeClass">
+		<view class="hero">
+			<view class="hero-title">记忆</view>
+			<view class="hero-sub">{{ convTitle }}</view>
+		</view>
+
 		<view class="toolbar">
 			<view class="chips">
 				<view
@@ -14,17 +19,17 @@
 			</view>
 			<view class="toolbar-right">
 				<view class="count">共 {{ memories.length }} 条</view>
-				<view class="tool-btn" @tap="openNew">新建</view>
+				<view class="tool-btn accent" @tap="openNew">＋ 新建</view>
 				<view class="tool-btn" :class="{ on: multiMode }" @tap="toggleMulti">{{ multiMode ? '取消' : '多选' }}</view>
 			</view>
 		</view>
-		<view class="conv-bar">
-			<text class="conv-label">当前对话</text>
-			<text class="conv-name">{{ convTitle }}</text>
-		</view>
 
 		<scroll-view scroll-y class="list">
-			<view v-if="!memories.length" class="empty">暂无记忆</view>
+			<view v-if="!memories.length" class="empty">
+				<text class="empty-emoji">🧠</text>
+				<text class="empty-text">暂无记忆</text>
+				<text class="empty-hint">LLM 会在对话中为你沉淀核心事实</text>
+			</view>
 			<view v-for="m in memories" :key="m.id" class="card" :class="{ selected: isSelected(m.id) }" @tap="multiMode && toggleSelect(m.id)">
 				<view class="card-head">
 					<view v-if="multiMode" class="check" :class="{ on: isSelected(m.id) }"></view>
@@ -84,6 +89,9 @@
 				</view>
 			</view>
 		</view>
+
+		<!-- 自定义底部导航栏 -->
+		<custom-tab-bar :active="1" />
 	</view>
 </template>
 
@@ -231,122 +239,145 @@
 		height: 100vh;
 		display: flex;
 		flex-direction: column;
-		background: #f7f8fa;
+		background: var(--c-bg);
+		box-sizing: border-box;
+		/* 底部为自绘 tabBar，预留其高度，避免列表/多选栏被遮挡 */
+		padding-bottom: calc(var(--ctab-h, 112rpx) + env(safe-area-inset-bottom));
+	}
+
+	.hero {
+		padding: 40rpx 40rpx 8rpx;
+	}
+	.hero-title {
+		font-size: 44rpx;
+		font-weight: 700;
+		color: var(--c-text);
+		line-height: 1.3;
+	}
+	.hero-sub {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		color: var(--c-text-aid);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.toolbar {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 20rpx 30rpx;
+		padding: 24rpx 40rpx 8rpx;
 	}
 
+	/* 筛选按钮独占整行、四等分：无论如何缩放都横排，white-space:nowrap 保证不内部断字 */
 	.chips {
 		display: flex;
+		align-items: stretch;
+		width: 100%;
+		box-sizing: border-box;
 	}
 
 	.chip {
-		padding: 10rpx 24rpx;
-		margin-right: 16rpx;
-		border-radius: 30rpx;
-		background: #ffffff;
-		font-size: 24rpx;
-		color: #666;
-		border: 1rpx solid #e5e6eb;
+		flex: 1;
+		min-width: 0;
+		text-align: center;
+		white-space: nowrap; /* 关键：单个"名词"永不拆行 */
+		padding: 14rpx 8rpx;
+		margin-right: 12rpx;
+		font-size: 26rpx;
+		border-radius: var(--c-radius-full);
+		background: var(--c-card);
+		color: var(--c-text-secondary);
+		border: 1rpx solid var(--c-line);
+		transition: background 0.2s, color 0.2s;
+	}
+
+	.chip:last-child {
+		margin-right: 0;
 	}
 
 	.chip.active {
-		background: #5b7cfa;
+		background: var(--c-primary);
 		color: #fff;
-		border-color: #5b7cfa;
+		border-color: var(--c-primary);
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.3);
 	}
 
 	.count {
 		font-size: 24rpx;
-		color: #999;
+		color: var(--c-text-aid);
 	}
 
 	.toolbar-right {
 		display: flex;
 		align-items: center;
+		justify-content: flex-end;
+		width: 100%;
+		margin-top: 20rpx;
 	}
 
 	.tool-btn {
 		margin-left: 16rpx;
 		padding: 8rpx 24rpx;
-		border-radius: 30rpx;
+		border-radius: var(--c-radius-full);
 		font-size: 24rpx;
-		color: #5b7cfa;
-		background: #eef1fe;
+		color: var(--c-primary);
+		background: var(--c-primary-light);
+	}
+
+	.tool-btn.accent {
+		color: #fff;
+		background: var(--c-brand-gradient);
+		font-weight: 600;
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.3);
 	}
 
 	.tool-btn.on {
 		color: #fff;
-		background: #f53f3f;
-	}
-
-	.conv-bar {
-		display: flex;
-		align-items: center;
-		padding: 8rpx 30rpx 16rpx;
-		font-size: 22rpx;
-		color: #999;
-	}
-
-	.conv-label {
-		flex-shrink: 0;
-		color: #bbb;
-	}
-
-	.conv-name {
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: #5b7cfa;
+		background: var(--c-danger);
 	}
 
 	.list {
 		flex: 1;
-		padding: 0 30rpx;
+		padding: 16rpx 40rpx 40rpx;
 		box-sizing: border-box;
 	}
 
 	.empty {
-		margin-top: 200rpx;
-		text-align: center;
-		color: #bbb;
-		font-size: 26rpx;
+		margin-top: 160rpx;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
 	}
+	.empty-emoji { font-size: 88rpx; }
+	.empty-text { margin-top: 24rpx; font-size: 28rpx; color: var(--c-text-secondary); }
+	.empty-hint { margin-top: 8rpx; font-size: 24rpx; color: var(--c-text-aid); }
 
 	.card {
-		background: #ffffff;
-		border-radius: 16rpx;
-		padding: 24rpx;
-		margin-bottom: 20rpx;
-		box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
-		border: 2rpx solid transparent;
+		background: var(--c-card);
+		border-radius: var(--c-radius-lg);
+		padding: 28rpx;
+		margin-bottom: 24rpx;
+		box-shadow: var(--c-shadow-card);
+		border: 1rpx solid transparent;
 	}
 
 	.card.selected {
-		border-color: #5b7cfa;
-		background: #f5f7ff;
+		border-color: var(--c-primary);
+		background: linear-gradient(135deg, var(--c-primary-light) 0%, var(--c-card) 100%);
 	}
 
 	.check {
 		width: 36rpx;
 		height: 36rpx;
 		border-radius: 50%;
-		border: 2rpx solid #c0c4cc;
+		border: 2rpx solid var(--c-line);
 		margin-right: 16rpx;
 		flex-shrink: 0;
 		box-sizing: border-box;
 	}
 
 	.check.on {
-		border-color: #5b7cfa;
-		background: #5b7cfa;
+		border-color: var(--c-primary);
+		background: var(--c-primary);
 		position: relative;
 	}
 
@@ -369,74 +400,67 @@
 
 	.badge {
 		font-size: 20rpx;
-		padding: 4rpx 12rpx;
-		border-radius: 8rpx;
+		padding: 4rpx 14rpx;
+		border-radius: var(--c-radius-sm);
 		color: #fff;
+		font-weight: 600;
 	}
 
-	.lv-L1 {
-		background: #f53f3f;
-	}
-
-	.lv-L2 {
-		background: #ff9f0a;
-	}
-
-	.lv-L3 {
-		background: #bfbfbf;
-	}
+	.lv-L1 { background: var(--c-l1); }
+	.lv-L2 { background: var(--c-l2); }
+	.lv-L3 { background: var(--c-l3); }
 
 	.cat {
 		margin-left: 14rpx;
 		font-size: 22rpx;
-		color: #5b7cfa;
-		background: #eef1fe;
+		color: var(--c-primary);
+		background: var(--c-primary-light);
 		padding: 4rpx 12rpx;
-		border-radius: 8rpx;
+		border-radius: var(--c-radius-sm);
 	}
 
 	.stars {
 		margin-left: 14rpx;
 		font-size: 24rpx;
-		color: #ff9500;
+		color: var(--c-warning);
 	}
 
 	.stars .dim {
-		color: #e5e6eb;
+		color: var(--c-line);
 	}
 
 	.time {
 		flex: 1;
 		text-align: right;
 		font-size: 22rpx;
-		color: #bbb;
+		color: var(--c-text-aid);
 	}
 
 	.del {
 		margin-left: 12rpx;
 		font-size: 22rpx;
-		color: #f53f3f;
+		color: var(--c-danger);
 		padding: 4rpx 8rpx;
 	}
 
 	.edit {
 		margin-left: 12rpx;
 		font-size: 22rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 		padding: 4rpx 8rpx;
 	}
 
 	.card-content {
 		margin-top: 16rpx;
 		font-size: 28rpx;
-		color: #333;
+		color: var(--c-text);
 		line-height: 1.6;
 	}
 
 	.card-kw {
 		margin-top: 12rpx;
 		font-size: 22rpx;
-		color: #999;
+		color: var(--c-text-aid);
 	}
 
 	.mask {
@@ -445,7 +469,7 @@
 		top: 0;
 		right: 0;
 		bottom: 0;
-		background: rgba(0, 0, 0, 0.45);
+		background: rgba(15, 18, 29, 0.45);
 		z-index: 999;
 		display: flex;
 		align-items: center;
@@ -454,41 +478,43 @@
 
 	.edit-panel {
 		width: 640rpx;
-		background: #fff;
-		border-radius: 20rpx;
-		padding: 32rpx;
+		background: var(--c-card);
+		border-radius: var(--c-radius-lg);
+		padding: 36rpx;
 		box-sizing: border-box;
+		box-shadow: var(--c-shadow-card);
 	}
 
 	.edit-title {
 		font-size: 32rpx;
 		font-weight: 600;
-		color: #333;
+		color: var(--c-text);
 		text-align: center;
-		margin-bottom: 24rpx;
+		margin-bottom: 28rpx;
 	}
 
 	.edit-area {
 		width: 100%;
 		height: 200rpx;
-		background: #f7f8fa;
-		border-radius: 12rpx;
+		background: var(--c-bg);
+		border-radius: var(--c-radius-md);
 		padding: 20rpx;
 		box-sizing: border-box;
 		font-size: 28rpx;
 		line-height: 1.5;
+		color: var(--c-text);
 	}
 
 	.edit-priority {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		margin-top: 24rpx;
+		margin-top: 28rpx;
 	}
 
 	.edit-label {
 		font-size: 26rpx;
-		color: #666;
+		color: var(--c-text-secondary);
 	}
 
 	.prio-stars {
@@ -497,19 +523,21 @@
 
 	.prio-star {
 		font-size: 48rpx;
-		color: #e5e6eb;
+		color: var(--c-line);
 		padding: 0 6rpx;
+		transition: color 0.15s, transform 0.15s;
 	}
 
 	.prio-star.on {
-		color: #ff9500;
+		color: var(--c-warning);
+		transform: scale(1.05);
 	}
 
 	.edit-level {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		margin-top: 24rpx;
+		margin-top: 28rpx;
 	}
 
 	.level-btns {
@@ -519,22 +547,23 @@
 	.level-btn {
 		padding: 8rpx 22rpx;
 		margin-left: 12rpx;
-		border-radius: 24rpx;
-		border: 1rpx solid #e5e6eb;
+		border-radius: var(--c-radius-full);
+		border: 1rpx solid var(--c-line);
 		font-size: 24rpx;
-		color: #666;
-		background: #f7f8fa;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.level-btn.on {
-		background: #5b7cfa;
-		border-color: #5b7cfa;
+		background: var(--c-primary);
+		border-color: var(--c-primary);
 		color: #fff;
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.3);
 	}
 
 	.edit-btns {
 		display: flex;
-		margin-top: 32rpx;
+		margin-top: 36rpx;
 	}
 
 	.edit-btn {
@@ -542,37 +571,38 @@
 		height: 80rpx;
 		line-height: 80rpx;
 		font-size: 28rpx;
-		border-radius: 40rpx;
+		border-radius: var(--c-radius-full);
 		margin: 0 10rpx;
 	}
 
 	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.edit-btn.ok {
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-brand-gradient);
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.3);
 	}
 
 	.multi-bar {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 16rpx 30rpx calc(16rpx + env(safe-area-inset-bottom));
-		background: #ffffff;
-		border-top: 1rpx solid #eee;
+		padding: 16rpx 40rpx calc(16rpx + env(safe-area-inset-bottom));
+		background: var(--c-card);
+		border-top: 1rpx solid var(--c-line);
 	}
 
 	.multi-count {
 		font-size: 26rpx;
-		color: #333;
+		color: var(--c-text);
 	}
 
 	.multi-all {
 		font-size: 26rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 		padding: 8rpx 16rpx;
 	}
 
@@ -582,12 +612,13 @@
 		line-height: 76rpx;
 		font-size: 28rpx;
 		color: #fff;
-		background: #f53f3f;
-		border-radius: 38rpx;
+		background: var(--c-brand-gradient);
+		border-radius: var(--c-radius-full);
+		box-shadow: 0 4rpx 12rpx rgba(240, 66, 75, 0.3);
 	}
 
 	.multi-del[disabled] {
-		background: #ffd4d4;
+		background: var(--c-danger-light);
 		color: #fff;
 	}
 </style>

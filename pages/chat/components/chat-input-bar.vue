@@ -43,14 +43,15 @@
 		align-items: center;
 		padding: 16rpx 24rpx;
 		padding-bottom: calc(16rpx + env(safe-area-inset-bottom));
-		background: #ffffff;
-		border-top: 1rpx solid #eee;
+		background: var(--c-card);
+		border-top: 1rpx solid var(--c-line);
 	}
 
 	.input {
 		flex: 1;
 		height: 76rpx;
-		background: #f2f3f5;
+		background: var(--c-bg);
+		color: var(--c-text);
 		border-radius: 38rpx;
 		padding: 0 30rpx;
 		font-size: 28rpx;
@@ -59,12 +60,12 @@
 	.emoji-btn {
 		margin-left: 16rpx;
 		font-size: 26rpx;
-		color: #666;
+		color: var(--c-text-secondary);
 		padding: 8rpx 16rpx;
 	}
 
 	.emoji-btn.on {
-		color: #5b7cfa;
+		color: var(--c-primary);
 		font-weight: 600;
 	}
 
@@ -75,12 +76,12 @@
 		padding: 0 40rpx;
 		font-size: 28rpx;
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-primary);
 		border-radius: 38rpx;
 	}
 
 	.send-btn[disabled] {
-		background: #c8d0fa;
-		color: #fff;
+		background: var(--c-primary-light);
+		color: var(--c-text-aid);
 	}
 </style>

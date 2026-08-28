@@ -148,7 +148,7 @@
 
 	.history-panel {
 		width: 660rpx;
-		background: #fff;
+		background: var(--c-card);
 		border-radius: 20rpx;
 		padding: 32rpx;
 		box-sizing: border-box;
@@ -157,7 +157,7 @@
 	.edit-title {
 		font-size: 32rpx;
 		font-weight: 600;
-		color: #333;
+		color: var(--c-text);
 		text-align: center;
 		margin-bottom: 24rpx;
 	}
@@ -171,7 +171,7 @@
 		padding: 80rpx 0;
 		text-align: center;
 		font-size: 26rpx;
-		color: #bbb;
+		color: var(--c-text-aid);
 	}
 
 	.history-item {
@@ -179,13 +179,13 @@
 		align-items: center;
 		padding: 20rpx 24rpx;
 		border-radius: 12rpx;
-		background: #f7f8fa;
+		background: var(--c-bg);
 		margin-bottom: 16rpx;
 	}
 
 	.history-item.active {
-		background: #eef1fe;
-		border: 2rpx solid #5b7cfa;
+		background: var(--c-primary-light);
+		border: 2rpx solid var(--c-primary);
 		box-sizing: border-box;
 	}
 
@@ -196,7 +196,7 @@
 
 	.history-title {
 		font-size: 28rpx;
-		color: #333;
+		color: var(--c-text);
 		font-weight: 500;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -206,7 +206,7 @@
 	.history-preview {
 		margin-top: 6rpx;
 		font-size: 22rpx;
-		color: #999;
+		color: var(--c-text-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -222,13 +222,13 @@
 
 	.history-time {
 		font-size: 20rpx;
-		color: #bbb;
+		color: var(--c-text-aid);
 	}
 
 	.history-del {
 		margin-top: 10rpx;
 		font-size: 22rpx;
-		color: #f53f3f;
+		color: var(--c-danger);
 		padding: 4rpx 8rpx;
 	}
 
@@ -242,13 +242,13 @@
 	}
 
 	.edit-btn.cancel {
-		color: #666;
-		background: #f2f3f5;
+		color: var(--c-text-secondary);
+		background: var(--c-bg);
 	}
 
 	.edit-btn.ok {
 		color: #fff;
-		background: #5b7cfa;
+		background: var(--c-primary);
 	}
 
 	.compress-btn {
@@ -270,8 +270,8 @@
 		height: 76rpx;
 		line-height: 76rpx;
 		font-size: 26rpx;
-		color: #5b7cfa;
-		background: #eef1fe;
+		color: var(--c-primary);
+		background: var(--c-primary-light);
 		border-radius: 38rpx;
 	}
 

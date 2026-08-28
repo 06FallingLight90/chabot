@@ -14,8 +14,50 @@
 
 /* 颜色变量 */
 
+/* ===== 本分支（beautify）设计令牌 =====
+ * 统一现代化视觉基础，供 scss 页面/组件引用。
+ * 普通 css 页面请使用 App.vue 中同名的 CSS 变量（--c-*），二者保持一致。
+ */
+
+/* 品牌主色 */
+$c-primary: #5b7cfa;
+$c-primary-light: #e5ecff;   /* 主色浅底 */
+$c-primary-dark: #4a66df;
+
+/* 渐变（品牌 CTA 用） */
+$c-brand-gradient: linear-gradient(135deg, #5b7cfa 0%, #8b5cf6 100%);
+
+/* 中性色 */
+$c-text: #1f2329;            /* 主文本 */
+$c-text-secondary: #646a73;  /* 次级文本 */
+$c-text-aid: #9aa0a8;        /* 弱化/提示 */
+$c-bg: #f6f7fb;              /* 页面背景 */
+$c-card: #ffffff;            /* 卡片背景 */
+$c-line: #e6e9f0;            /* 分割线/边框 */
+
+/* 状态色 */
+$c-success: #22c55e;
+$c-warning: #f7b955;
+$c-danger: #f0424b;
+$c-danger-light: #ffe9ea;
+
+/* 语义色（L 等级） */
+$c-l1: #f0424b;
+$c-l2: #f7a325;
+$c-l3: #9aa0a8;
+
+/* 圆角 / 间距 / 阴影 */
+$c-radius-sm: 8rpx;
+$c-radius-md: 16rpx;
+$c-radius-lg: 24rpx;
+$c-radius-full: 999rpx;
+$c-shadow-card: 0 6rpx 24rpx rgba(31, 35, 41, 0.06);
+$c-gap: 24rpx;
+
+/* ===== 兼容 uni-app 内置变量（保持插件兼容） ===== */
+
 /* 行为相关颜色 */
-$uni-color-primary: #007aff;
+$uni-color-primary: $c-primary;
 $uni-color-success: #4cd964;
 $uni-color-warning: #f0ad4e;
 $uni-color-error: #dd524d;

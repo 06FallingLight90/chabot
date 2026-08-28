@@ -25,7 +25,10 @@
 					class="msg-row"
 					:class="r.role"
 				>
-					<view v-if="r.type === 'text'" class="bubble">{{ r.text }}</view>
+					<view v-if="r.type === 'text'" class="bubble">
+						<view class="bubble-bg" :style="bubbleBgStyle"></view>
+						<text class="bubble-txt">{{ r.text }}</text>
+					</view>
 					<image v-else class="bubble-emoji" :src="r.src" mode="aspectFit" />
 				</view>
 				<view v-if="loading" class="msg-row assistant">
@@ -71,7 +74,8 @@
 			loading: { type: Boolean, default: false },
 			personaName: { type: String, default: '' },
 			bg: { type: String, default: '' },
-			emojis: { type: Array, default: () => [] }
+			emojis: { type: Array, default: () => [] },
+			bubbleOpacity: { type: Number, default: 1 } // 气泡背景不透明度 0.2~1（1=不透明）
 		},
 		emits: ['regenerate'],
 		data() {
@@ -88,6 +92,11 @@
 			}
 		},
 		computed: {
+			// 气泡背景不透明度（钳制 0.2~1），作用于 .bubble-bg 层，文字始终不透明
+			bubbleBgStyle() {
+				const o = Number(this.bubbleOpacity)
+				return { opacity: Number.isFinite(o) ? Math.min(1, Math.max(0.2, o)) : 1 }
+			},
 			bgStyle() {
 				return this.bg
 					? {
@@ -231,7 +240,7 @@
 		padding: 16rpx 0 24rpx;
 		text-align: center;
 		font-size: 24rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 	}
 
 	.empty {
@@ -241,14 +250,14 @@
 
 	.empty-name {
 		font-size: 40rpx;
-		color: #5b7cfa;
+		color: var(--c-primary);
 		font-weight: 600;
 	}
 
 	.empty-tip {
 		margin-top: 16rpx;
 		font-size: 26rpx;
-		color: #bbb;
+		color: var(--c-text-aid);
 	}
 
 	.msg-row {
@@ -269,35 +278,58 @@
 
 	.regenerate {
 		font-size: 22rpx;
-		color: #999;
+		color: var(--c-text-aid);
 		padding: 4rpx 16rpx;
 	}
 
 	.bubble {
 		max-width: 80%;
 		padding: 18rpx 24rpx;
-		border-radius: 20rpx;
+		border-radius: var(--c-radius-lg);
 		font-size: 28rpx;
 		line-height: 1.6;
 		word-break: break-word;
 		white-space: pre-wrap;
+		position: relative;
+		overflow: hidden;
+	}
+
+	/* 气泡背景层：承载不透明度设置（透明度只作用于背景，文字始终清晰） */
+	.bubble-bg {
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		pointer-events: none;
+	}
+
+	.bubble-txt {
+		position: relative;
+		z-index: 1;
+		display: block;
 	}
 
 	.msg-row.assistant .bubble {
-		background: #ffffff;
-		color: #333;
+		color: var(--c-text);
 		border-top-left-radius: 6rpx;
-		box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+		box-shadow: var(--c-shadow-card);
+	}
+
+	.msg-row.assistant .bubble-bg {
+		background: var(--c-card);
 	}
 
 	.msg-row.user .bubble {
-		background: #5b7cfa;
 		color: #fff;
 		border-top-right-radius: 6rpx;
+		box-shadow: 0 4rpx 12rpx rgba(91, 124, 250, 0.28);
+	}
+
+	.msg-row.user .bubble-bg {
+		background: var(--c-brand-gradient);
 	}
 
 	.bubble.typing {
-		color: #aaa;
+		color: var(--c-text-aid);
 	}
 
 	/* 表情消息：图片独立成行展示 */
