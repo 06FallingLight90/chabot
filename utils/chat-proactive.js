@@ -91,9 +91,9 @@ function _lastUserAt() {
 	return 0
 }
 
-/** 当前时刻是否在主动消息时段窗口内 */
+/** 当前时刻是否在主动消息时段窗口内（闭区间 [start, end]：end 取整点含该小时，故 end=23 覆盖 23:00~23:59） */
 function _inWindow(s) {
-	return new Date().getHours() >= s.proactiveStartHour && new Date().getHours() < s.proactiveEndHour
+	return new Date().getHours() >= s.proactiveStartHour && new Date().getHours() <= s.proactiveEndHour
 }
 
 /** 到期触发门禁（非调试）：时段窗口 + 已有用户消息 + 未超空闲冷却 */
@@ -120,7 +120,7 @@ function _nextDelay(s) {
 	if (h < s.proactiveStartHour) {
 		return Math.max(60000, toStart(s.proactiveStartHour))
 	}
-	if (h >= s.proactiveEndHour) {
+	if (h > s.proactiveEndHour) {
 		return Math.max(60000, toStart(s.proactiveStartHour + 24))
 	}
 	return Math.max(60000, (min + Math.random() * (max - min)) * 60000)
