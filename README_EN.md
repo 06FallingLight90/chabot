@@ -45,6 +45,7 @@ The AI reaches out to you like a real person instead of just waiting for replies
 - **Realistic pacing**: ≤1 sentence per message, ≤2 consecutive emojis, multiple messages split into separate bubbles; it wraps up near the end of a topic with a short line or a single emoji
 - Configurable active time window and frequency level (low / medium / high), plus a custom countdown (seconds) for debugging
 - **Low background cost**: a single foreground timer + on-resume catch-up, zero polling in the background
+- **Background system notification**: enabling proactive chat requests message permission and shows a system notification when a proactive message arrives while the app is in the background (local notification on App / browser Notification on H5; never interrupts you while you're on the chat page)
 
 ---
 
@@ -55,7 +56,7 @@ The AI reaches out to you like a real person instead of just waiting for replies
 - **Scene tracking**: the LLM maintains the current scene each reply (`Scene:` line), with **real-time / virtual-time** modes; scene history is viewable and editable
 - **Context compression**: older context is summarized by the LLM; later requests send only "summary + uncompressed tail" to cut token usage dramatically. Automatic (by message interval) or manual
 - **Emoji management**: batch upload with per-image naming, drag reordering, rename & delete; emojis and text render as separate segments
-- **Realistic proactive chat**: see the Core Highlights above — pick your window, frequency and debug countdown, or one-tap "send a proactive message now"
+- **Realistic proactive chat**: see the Core Highlights above — pick your window, frequency and debug countdown, or one-tap "send a proactive message now"; natively notifies you in the background when a proactive message arrives
 - **Message voice reading (TTS)**: optional; new LLM replies are synthesized and played automatically on render (Qwen-TTS by default; API key / model / voice configurable). Only text is read — emojis are skipped; audio is never saved to disk and is destroyed after one playback; a one-tap interface test is available in Settings
 - **Memory management**: filter / create / edit content, priority & level / **multi-select batch delete**
 - **Export chat**: one-tap export of the current conversation to `.txt` (download on H5, save to app documents on App, copy to clipboard on Mini Program)
@@ -129,6 +130,7 @@ See [CLAUDE.md](CLAUDE.md) for details.
 │   ├── chat-proactive.js  # Realistic proactive chat domain (foreground scheduler + catch-up + send)
 │   ├── llm.js             # OpenAI-compatible LLM client (streaming & thinking control, logging)
 │   ├── tts.js             # TTS voice reading (Qwen-TTS synthesis + playback + interface test)
+│   ├── notify.js          # System notification layer (proactive message background notifications)
 │   ├── log.js             # Debug log ring buffer
 │   └── export.js          # Chat export
 └── scripts/test-memory.mjs  # Core logic assertions (npm test)

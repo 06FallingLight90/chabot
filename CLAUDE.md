@@ -38,6 +38,7 @@
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，stream:false + reasoning_effort 思考控制）
 │   ├── tts.js             # TTS 语音阅读（Qwen-TTS 合成 + 播放 + 接口测试，表情不朗读/不落盘）
 │   ├── log.js             # 调试日志（环形缓冲，供设置页调试面板）
+│   ├── notify.js          # 系统通知层（拟真主动消息后台弹通知：App 本地通知/H5 浏览器通知，仅后台弹）
 │   ├── export.js          # 聊天记录导出（H5 下载 / App 写文档目录 / 小程序复制降级）
 │   ├── chat.js            # 聊天服务门面 + 发送主链路（统一对外导出，各调用方/测试入口不变）
 │   ├── chat-state.js      # 聊天服务共享状态（memoryStore 单例 + 最近请求缓存，消除跨模块循环依赖）
@@ -123,6 +124,7 @@
 - **发送链路**：组装 system（`buildSystemPrompt` 传 `proactive=true` 注入 `PROACTIVE_GUIDE`）+ 最近 15 条历史 + 末尾追加**内部指令行**（仅请求不落库，让模型以"主动开口"方式输出）→ `chatCompletion` → `parseAndValidateReply(text, {proactive:true})` 校验（每条 ≤1 句、连续表情 ≤2，不合格自动重试 `maxRequestAttempts`）→ 按换行拆多条 `addChatRow('assistant', ...)` 落库（rollback 挂最后一行）→ Scene/Memory 由校验写入 → `maybeCompress` + 维护 → `uni.$emit('proactive-burst')` 通知聊天页刷新
 - **格式约束范围**：开启后**该对话所有回复**（含普通回复）均受"每条 ≤1 句、连续表情 ≤2"约束（决策点 1）；`countSentences` 按句末标点 `。！？!?…` 计句、连续标点合并（如"哈哈。。"=1）；`sendMessage` 对拟真会话按换行拆多条气泡落库并返回 `burst` 数组供聊天页逐条展示
 - **调试按钮**：设置页「立即发送一条主动消息」→ `debugProactiveMessage()`（`force` 忽略开关/时段/抑制门禁，仅校验 API 配置），结果写入调试日志
+- **后台通知（可选，`notify.js`）**：开启拟真时在设置页保存会自动申请系统通知权限（App Android 13+ `POST_NOTIFICATIONS`、H5 `Notification.requestPermission`）；收到主动消息落库后调用 `notifyProactive(text)`，**仅在应用处于后台时**弹系统通知（App `plus.push.createMessage` 本地通知 / H5 浏览器 `Notification`），前台用户在聊天页不打扰；小程序无任意系统通知能力静默跳过。前台/后台状态由 `App.vue` `onShow/onHide` 用 `setForeground` 同步（通知层在 Node/无平台 API 环境安全降级不抛错）。**注意平台限制**：App 真后台 JS 挂起、主动消息只在回前台补发时才发，故 App 端后台弹通知当前基本不触发；H5 后台（节流定时器仍触发）可正常弹通知
 - **重新生成兼容**：`popLastAssistant` 移除用户消息后**连续 assistant 行**（burst 一并移除，rollback 取最后一行），兼容单行与旧数据
 
 ### 表情包系统（utils/emojis.js + 聊天页）

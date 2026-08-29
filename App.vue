@@ -1,6 +1,7 @@
 <script>
 	import { initChatService, maybeMaintenance } from './utils/chat.js'
 	import { catchUpProactive } from './utils/chat-proactive.js'
+	import { setForeground } from './utils/notify.js'
 
 	export default {
 		onLaunch: function() {
@@ -13,11 +14,14 @@
 			maybeMaintenance()
 			// 拟真聊天：恢复调度；退后台期间已到期（App 挂起导致定时器未触发）则立即补发一次
 			catchUpProactive()
+			// 拟真通知：标记回到前台（回到前台时不再重复弹系统通知）
+			setForeground(true)
 			console.log('App Show')
 		},
 		onHide: function() {
 			// 拟真聊天：退后台不清定时器——单条 pending timeout 后台零占用；
 			// H5 隐藏标签页仍会被节流触发，App 挂起则交给 onShow 的 catchUpProactive 补发
+			setForeground(false)
 			console.log('App Hide')
 		}
 	}

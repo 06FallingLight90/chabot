@@ -26,6 +26,7 @@ import { addLog } from './log.js'
 import { emojiListForPrompt } from './emojis.js'
 import { maybeCompress } from './chat-compress.js'
 import { parseAndValidateReply } from './chat.js'
+import { notifyProactive } from './notify.js'
 
 // ---------- 常量 ----------
 
@@ -284,6 +285,8 @@ export async function sendProactiveBurst(opts = {}) {
 		memoryStore.maintenance()
 		maybeCompress().catch(() => { })
 		addLog('info', '主动消息已发送', lines.join(' / '))
+		// 系统通知：仅在应用处于后台时弹（前台刚发完用户正在看，不打扰）
+		notifyProactive(lines.join('\n'))
 		// 通知聊天页刷新（uni.$emit 在 App/H5/小程序均可用；Node 测试环境无此 API，跳过）
 		if (typeof uni !== 'undefined' && uni.$emit) uni.$emit('proactive-burst', { lines })
 		return { lines, saved: result.saved }

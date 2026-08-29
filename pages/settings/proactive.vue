@@ -72,6 +72,7 @@
 <script>
 	import { getConversationSettings, saveSettings } from '../../utils/chat.js'
 	import { debugProactiveMessage, rearmProactive, getProactiveCountdown } from '../../utils/chat-proactive.js'
+	import { requestNotifyPermission } from '../../utils/notify.js'
 	import { addLog } from '../../utils/log.js'
 
 	export default {
@@ -162,6 +163,8 @@
 				}
 				saveSettings(this.s)
 				rearmProactive()
+				// 开启拟真时申请系统通知权限（后台收到主动消息时弹通知）
+				if (this.s.proactiveEnabled) requestNotifyPermission()
 				addLog(
 					'info',
 					'保存设置',
