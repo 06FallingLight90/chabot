@@ -90,9 +90,9 @@
 			</view>
 		</view>
 
-		<!-- 自定义底部导航栏 -->
-		<custom-tab-bar :active="1" />
-	</view>
+	<!-- 自绘底部导航栏（替代原生 tabBar，随主题深浅色切换） -->
+	<custom-tab-bar :active="1" />
+</view>
 </template>
 
 <script>
@@ -241,8 +241,8 @@
 		flex-direction: column;
 		background: var(--c-bg);
 		box-sizing: border-box;
-		/* 底部为自绘 tabBar，预留其高度，避免列表/多选栏被遮挡 */
-		padding-bottom: calc(var(--ctab-h, 112rpx) + env(safe-area-inset-bottom));
+		/* 底部为自绘 tabBar，预留其高度（含安全区），避免列表/多选栏被遮挡 */
+		padding-bottom: calc(var(--ctab-h, 100rpx) + env(safe-area-inset-bottom));
 	}
 
 	.hero {

@@ -27,9 +27,9 @@
 			</view>
 		</view>
 
-		<!-- 自定义底部导航栏 -->
-		<custom-tab-bar :active="2" />
-	</view>
+	<!-- 自绘底部导航栏（替代原生 tabBar，随主题深浅色切换） -->
+	<custom-tab-bar :active="2" />
+</view>
 </template>
 
 <script>
@@ -88,7 +88,7 @@
 
 <style>
 	.page {
-		padding: 20rpx 30rpx calc(var(--ctab-h, 112rpx) + env(safe-area-inset-bottom) + 40rpx);
+		padding: 20rpx 30rpx calc(var(--ctab-h, 100rpx) + env(safe-area-inset-bottom) + 40rpx);
 		background: var(--c-bg);
 		min-height: 100vh;
 		box-sizing: border-box;

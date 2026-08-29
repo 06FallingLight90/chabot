@@ -103,22 +103,25 @@
 	},
 	"tabBar": {
 		"custom": true,
-		"color": "#9aa0a8",
+		"color": "#999999",
 		"selectedColor": "#5B7CFA",
 		"backgroundColor": "#ffffff",
-		"borderStyle": "white",
+		"borderStyle": "black",
 		"list": [
 			{
 				"pagePath": "pages/chat/chat",
-				"text": "聊天"
+				"text": "聊天",
+				"visible": false
 			},
 			{
 				"pagePath": "pages/memory/memory",
-				"text": "记忆"
+				"text": "记忆",
+				"visible": false
 			},
 			{
 				"pagePath": "pages/settings/settings",
-				"text": "设置"
+				"text": "设置",
+				"visible": false
 			}
 		]
 	},
