@@ -186,6 +186,7 @@
 		padding: 20rpx;
 		box-sizing: border-box;
 		font-size: 26rpx;
+		color: var(--c-text);
 		line-height: 1.6;
 	}
 	.char-count {

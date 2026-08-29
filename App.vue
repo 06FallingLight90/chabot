@@ -170,6 +170,7 @@
 		border-radius: 12rpx;
 		padding: 0 24rpx;
 		font-size: 28rpx;
+		color: var(--c-text);
 		box-sizing: border-box;
 		width: 100%;
 	}
