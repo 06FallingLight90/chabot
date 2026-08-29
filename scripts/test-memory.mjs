@@ -708,6 +708,19 @@ const rows24 = storage.getChatRows()
 assert(rows24.length === 0 || rows24.every((r) => r.role !== 'user'), '当前会话无用户消息（拟真门禁前置）')
 let r24 = await pa.sendProactiveBurst()
 assert(r24 === null, '非调试：尚无用户消息时不主动发（返回 null）')
+const { getLogs: getDebugLogs } = await import('../utils/log.js')
+assert(getDebugLogs().some((l) => l.msg === '主动消息跳过'), '被门禁拦截时必须写「主动消息跳过」日志（杜绝"只见调度、无任何输出"）')
+// 自定义倒计时为调试工具：即使当前会话无用户消息，也绕过用户消息门禁照常发送
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveCustomSeconds: 12 })
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '测试主动消息\nScene: 用户在测试' } }] } })
+}
+r24 = await pa.sendProactiveBurst()
+assert(!!r24 && r24.lines[0] === '测试主动消息', '自定义倒计时（调试）：无用户消息也触发发送')
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveCustomSeconds: 0 })
+r24 = await pa.sendProactiveBurst()
+assert(r24 === null, '清除自定义倒计时后，无用户消息仍不主动发（返回 null）')
 // 补一条用户消息，非 force 可触发
 storage.addChatRow('user', '在吗')
 globalThis.uni.request = (opts) => {

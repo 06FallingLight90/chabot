@@ -98,13 +98,21 @@ function _inWindow(s) {
 	return min >= s.proactiveStartMin && min <= s.proactiveEndMin
 }
 
-/** 到期触发门禁（非调试）：时段窗口 + 已有用户消息 */
-function _canFire(s) {
-	if (!_canRun(s)) return false
-	if (!_inWindow(s)) return false
-	const lastUserAt = _lastUserAt()
-	if (!lastUserAt) return false
-	return true
+/** 开关自定义倒计时（调试值 >0 即处于"测试模式"）：调试模式下忽略时段窗口与"必须有用户消息"门禁，便于随时验证链路 */
+function _isDebugCountdown(s) {
+	return parseInt(s && s.proactiveCustomSeconds, 10) > 0
+}
+
+/** 主动消息被门禁拦截时写一条可见日志，避免"只见调度、不知为何不发" */
+function _skipLog(reason) {
+	addLog('info', '主动消息跳过', reason)
+}
+
+/** 当天第几分钟 → "HH:MM" 展示 */
+function _fmtClockMin(min) {
+	const h = String(Math.floor(min / 60)).padStart(2, '0')
+	const m = String(min % 60).padStart(2, '0')
+	return `${h}:${m}`
 }
 
 /** 下次触发延迟（ms）：调试用自定义倒计时（proactiveCustomSeconds>0）优先；否则窗口外等到窗口起点、窗口内按档位随机间隔。始终 ≥10s（自定义）或 ≥60s，防忙循环/防误触 API 轰炸 */
@@ -156,8 +164,15 @@ function _tick() {
 	// _dueAt 为 0 说明已由 catchUp 补发过，此处不应再次触发（否则重复发送）
 	if (_dueAt && Date.now() >= _dueAt) {
 		_dueAt = 0
-		// 到期触发；未满足门禁（抑制/时段/空闲）则跳过本次，等待下一轮
-		sendProactiveBurst().catch(() => { })
+		// 到期触发：每次触发都必定产生一条可见日志——
+		//   成功 → 主动消息已发送（+ LLM 请求/响应）；
+		//   被门禁拦截 → 主动消息跳过（附原因），以及「拟真聊天到期·未发送」标记；
+		//   异常 → 主动消息失败（附堆栈），杜绝"只见调度、无任何输出"的静默失败。
+		sendProactiveBurst()
+			.then((r) => {
+				if (r === null) addLog('info', '拟真聊天到期', '已到触发时刻但未发送（原因见「主动消息跳过」日志）')
+			})
+			.catch((e) => addLog('err', '主动消息失败', (e && e.stack) || String(e)))
 	}
 	_schedule()
 }
@@ -189,7 +204,11 @@ export function catchUpProactive() {
 		// 清掉即将到期的旧定时器，避免其随后再触发一次造成重复发送，并立即重排
 		_clearTimer()
 		_dueAt = 0
-		sendProactiveBurst().catch(() => { })
+		sendProactiveBurst()
+			.then((r) => {
+				if (r === null) addLog('info', '拟真聊天补发', '已到触发时刻但未发送（原因见「主动消息跳过」日志）')
+			})
+			.catch((e) => addLog('err', '主动消息失败', (e && e.stack) || String(e)))
 	}
 	if (!_timer) _schedule()
 }
@@ -213,11 +232,31 @@ export function rearmProactive() {
 export async function sendProactiveBurst(opts = {}) {
 	const force = !!opts.force
 	const s = getConversationSettings()
+	const debugCountdown = _isDebugCountdown(s)
 	// 基本条件（开关 + 现实时间 + 未抑制）仅非调试时要求；调试按钮忽略开关/时段/空闲/抑制，但仍要求 API 配置
-	if (!force && !_canRun(s)) return null
-	if (!s.apiKey || !s.baseUrl || !s.model) return null
-	if (!force && !_canFire(s)) return null
-	if (_busy) return null
+	if (!force && !_canRun(s)) {
+		_skipLog(_suppressed ? '聊天页正在等待 LLM 回复（已抑制），本轮跳过' : '功能未开启（需开启拟真 + 现实时间 + 已配置 API）')
+		return null
+	}
+	if (!s.apiKey || !s.baseUrl || !s.model) {
+		_skipLog('API 配置不完整（缺少 baseUrl/API Key/model）')
+		return null
+	}
+	// 触发门禁：时段窗口 + 已有用户消息。自定义倒计时为调试工具，忽略这两项门禁，以便随时测试
+	if (!force) {
+		if (!debugCountdown && !_inWindow(s)) {
+			_skipLog(`不在主动消息时段窗口（${_fmtClockMin(s.proactiveStartMin)}-${_fmtClockMin(s.proactiveEndMin)}）`)
+			return null
+		}
+		if (!debugCountdown && !_lastUserAt()) {
+			_skipLog('当前会话还没有用户消息，本轮不主动发送')
+			return null
+		}
+	}
+	if (_busy) {
+		_skipLog('上一条主动消息仍在处理中，本轮跳过')
+		return null
+	}
 	_busy = true
 	try {
 		// 组装 system（与 sendMessage 一致，proactive 注入拟真规则）

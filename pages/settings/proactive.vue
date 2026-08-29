@@ -1,6 +1,6 @@
 <template>
 	<view class="ss-page" :class="themeClass">
-		<view class="ss-tipbar">拟真聊天：让 AI 更像真人、在随机时间主动给你发消息。更改后点击底部「保存设置」生效。仅「现实时间」模式生效。</view>
+		<view class="ss-tipbar">拟真聊天：让 AI 更像真人、在随机时间主动给你发消息。更改后点击底部「保存设置」生效。仅「现实时间」模式生效。若要后台接收通知，请在手机设置打开本应用的通知权限</view>
 
 		<view class="ss-card">
 			<view class="ss-title">拟真聊天</view>
