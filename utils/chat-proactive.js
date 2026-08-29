@@ -35,7 +35,6 @@ const LEVEL_RANGES = {
 	medium: [15, 45],
 	high: [5, 15]
 }
-const IDLE_CUTOFF_MS = 60 * 60 * 1000 // 距上次用户消息超过 60 分钟不再主动发（用户已离开）
 const TICK_MAX_MS = 60 * 60 * 1000 // 单次定时最长 60 分钟：即使间隔更长也先醒一次，保证窗口/设置变化及时响应
 const HISTORY_ENTRIES = 15 // 主动消息注入的对话历史条数（上限，与 sendMessage 一致）
 
@@ -98,13 +97,12 @@ function _inWindow(s) {
 	return min >= s.proactiveStartMin && min <= s.proactiveEndMin
 }
 
-/** 到期触发门禁（非调试）：时段窗口 + 已有用户消息 + 未超空闲冷却 */
+/** 到期触发门禁（非调试）：时段窗口 + 已有用户消息 */
 function _canFire(s) {
 	if (!_canRun(s)) return false
 	if (!_inWindow(s)) return false
 	const lastUserAt = _lastUserAt()
 	if (!lastUserAt) return false
-	if (Date.now() - lastUserAt > IDLE_CUTOFF_MS) return false
 	return true
 }
 
