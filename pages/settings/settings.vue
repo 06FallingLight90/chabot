@@ -34,8 +34,10 @@
 
 <script>
 	import { getConversationSettings } from '../../utils/chat.js'
+	import CustomTabBar from '../../components/custom-tab-bar/custom-tab-bar.vue'
 
 	export default {
+		components: { CustomTabBar },
 		data() {
 			return {
 				needConfig: false, // 接口配置缺失（baseUrl/apiKey 未填）时置 true

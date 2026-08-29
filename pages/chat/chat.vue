@@ -70,9 +70,10 @@
 	import ChatSceneEdit from './components/chat-scene-edit.vue'
 	import ChatHistory from './components/chat-history.vue'
 	import ChatPersona from './components/chat-persona.vue'
+	import CustomTabBar from '../../components/custom-tab-bar/custom-tab-bar.vue'
 
 	export default {
-		components: { ChatHeader, ChatMsgList, ChatInputBar, ChatEmojiPanel, ChatSceneEdit, ChatHistory, ChatPersona },
+		components: { ChatHeader, ChatMsgList, ChatInputBar, ChatEmojiPanel, ChatSceneEdit, ChatHistory, ChatPersona, CustomTabBar },
 		data() {
 			return {
 				messages: [],

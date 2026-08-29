@@ -31,7 +31,7 @@
 | `utils/theme.js`（新增） | 主题模式工具：**仅手动 `light`/`dark`**（默认浅色，无「跟随系统」），持久化 + `onThemeChange` 订阅实现即时换肤 |
 | `main.js` | 注册全局 `themeMixin`，为所有页面提供响应式 `themeClass`（`theme-light` / `theme-dark`），订阅本地切换事件即时生效，并按 `__theme` 同步原生导航栏配色（`__applyNavbar`） |
 | `pages/*.vue`（聊天/记忆/表情/设置） | 4 个页面根节点 `<view class="page">` 绑定 `:class="themeClass"`，接收暗黑/手动主题 |
-| `components/custom-tab-bar/custom-tab-bar.vue`（新增） | **自绘底部导航栏**：用主题令牌 `var(--c-card)`/`var(--c-line)`/`var(--c-brand-gradient)` 配色 + 表情图标，跟随手动深浅色切换，`active` prop 标识当前 tab；聊天/记忆/设置三页引入并预留底部高度。**切换用 `uni.reLaunch`**（页面非原生 tabBar 页）——已彻底移除 pages.json 里的 `tabBar` 配置，从而不渲染原生栏、不预留原生占位，三端只此一栏 |
+| `components/custom-tab-bar/custom-tab-bar.vue`（新增） | **自绘底部导航栏**：用主题令牌 `var(--c-card)`/`var(--c-line)`/`var(--c-brand-gradient)` 配色 + 表情图标，跟随手动深浅色切换，`active` prop 标识当前 tab。**切换用 `uni.reLaunch`**（页面非原生 tabBar 页）——已彻底移除 pages.json 里的 `tabBar` 配置，从而不渲染原生栏、不预留原生占位。**在聊天/记忆/设置三页显式 `import` + `components` 注册**（不依赖 easycom 自动扫描） |
 | `pages/settings/settings.vue` | 设置页现代化改造样板：区块改卡片样式、按钮改品牌渐变 + 圆角胶囊 + 阴影、配色全部走令牌；「界面外观 → 深色模式」**仅手动浅色/深色**（已删「跟随系统」）与「聊天气泡不透明度」滑块（0.2~1）；各按钮/输入框/卡片硬编码浅色全部令牌化以适配深色 |
 | `pages/chat/chat.vue` | 页面读取会话设置 `bubbleOpacity` 并透传给消息列表；根节点绑定 `:class="themeClass"` |
 | `pages/settings/settings.vue` | **重构为设置首页**：不再展示配置表单，改为「分条陈列」的分区跳转入口（界面外观/接口配置/人格配置/拟真聊天/语音阅读/上下文压缩/数据管理/调试日志/帮助/关于），入口带说明与「保存/自动保存」标签；**接口配置未填（地址或 Key 为空）时在其入口显示红色 `*`**（`needConfig`），提示必要项待配置 |

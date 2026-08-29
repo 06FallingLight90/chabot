@@ -98,8 +98,10 @@
 <script>
 	import { memoryStore, maybeMaintenance } from '../../utils/chat.js'
 	import { getConversations, getActiveConversationId } from '../../utils/storage.js'
+	import CustomTabBar from '../../components/custom-tab-bar/custom-tab-bar.vue'
 
 	export default {
+		components: { CustomTabBar },
 		data() {
 			return {
 				level: '',
