@@ -31,7 +31,7 @@
 | `utils/theme.js`（新增） | 主题模式工具：**仅手动 `light`/`dark`**（默认浅色，无「跟随系统」），持久化 + `onThemeChange` 订阅实现即时换肤 |
 | `main.js` | 注册全局 `themeMixin`，为所有页面提供响应式 `themeClass`（`theme-light` / `theme-dark`），订阅本地切换事件即时生效，并按 `__theme` 同步原生导航栏配色（`__applyNavbar`） |
 | `pages/*.vue`（聊天/记忆/表情/设置） | 4 个页面根节点 `<view class="page">` 绑定 `:class="themeClass"`，接收暗黑/手动主题 |
-| `components/custom-tab-bar/custom-tab-bar.vue`（新增） | **自绘底部导航栏**：用主题令牌 `var(--c-card)`/`var(--c-line)`/`var(--c-brand-gradient)` 配色 + 表情图标，跟随手动深浅色切换，`active` prop 标识当前 tab，`switchTab` 切换三个页面；聊天/记忆/设置三页引入并预留底部高度。组件 `mounted` 里 `uni.hideTabBar({animation:false})` 兜底隐藏原生栏（**`tabBar.custom:true` 仅对微信小程序隐藏原生栏，H5/App 仍会渲染，必须配合隐藏机制**），根除双栏 |
+| `components/custom-tab-bar/custom-tab-bar.vue`（新增） | **自绘底部导航栏**：用主题令牌 `var(--c-card)`/`var(--c-line)`/`var(--c-brand-gradient)` 配色 + 表情图标，跟随手动深浅色切换，`active` prop 标识当前 tab；聊天/记忆/设置三页引入并预留底部高度。**切换用 `uni.reLaunch`**（页面非原生 tabBar 页）——已彻底移除 pages.json 里的 `tabBar` 配置，从而不渲染原生栏、不预留原生占位，三端只此一栏 |
 | `pages/settings/settings.vue` | 设置页现代化改造样板：区块改卡片样式、按钮改品牌渐变 + 圆角胶囊 + 阴影、配色全部走令牌；「界面外观 → 深色模式」**仅手动浅色/深色**（已删「跟随系统」）与「聊天气泡不透明度」滑块（0.2~1）；各按钮/输入框/卡片硬编码浅色全部令牌化以适配深色 |
 | `pages/chat/chat.vue` | 页面读取会话设置 `bubbleOpacity` 并透传给消息列表；根节点绑定 `:class="themeClass"` |
 | `pages/settings/settings.vue` | **重构为设置首页**：不再展示配置表单，改为「分条陈列」的分区跳转入口（界面外观/接口配置/人格配置/拟真聊天/语音阅读/上下文压缩/数据管理/调试日志/帮助/关于），入口带说明与「保存/自动保存」标签；**接口配置未填（地址或 Key 为空）时在其入口显示红色 `*`**（`needConfig`），提示必要项待配置 |
@@ -46,7 +46,7 @@
 | `pages/settings/help.vue`（新增） | 设置子页·帮助：**各功能介绍与使用方法**（手风琴式折叠条目） |
 | `pages/settings/about.vue`（新增） | 设置子页·关于：**App 基本情况**（Logo/版本/简介/技术栈/接口协议/数据存储）＋**相关链接**（GitHub 仓库，点击复制：`06FallingLight90/chabot`）＋**鸣谢**（koishi-ai-pet 记忆机制灵感来源，点击复制链接） |
 | `pages.json` | 注册以上 10 个设置子页（`navigateTo` 跳转，不进 tabBar），并保留原生标题 |
-| `pages.json` | 撤回「跟随系统」：不再有顶层 `darkmode`/`themeLocation`；`tabBar` 改 `custom: true`，**并在每个 `list` 项加 `visible:false`**（该字段仅对 H5 生效）以隐藏原生 tabBar——因为 `custom:true` 只在微信小程序隐藏原生栏，H5/App 需 `visible:false` + `hideTabBar` 兜底 |
+| `pages.json` | 撤回「跟随系统」：不再有顶层 `darkmode`/`themeLocation`；**彻底移除 `tabBar` 配置**（不再声明原生 tabBar），从根本上消除原生栏渲染与占位残留，底部导航完全交给自绘 `custom-tab-bar`（`uni.reLaunch` 切页） |
 | `manifest.json` / `main.js` | 撤回「跟随系统」：移除各端 `darkmode`/`themeLocation` 与 `__applyTabBar`；原生导航栏配色仅在 `onShow`/`onReady`/`mounted` 由 `__applyNavbar` 按手动主题同步 |
 | `App.vue` | 新增设置子页面共用布局样式（`.ss-*` 命名空间，避免与业务页冲突）：卡片/行/按钮/输入框/标题/保存按钮/自动保存提示等 |
 | `pages/chat/components/chat-msg-list.vue` | 消息气泡改为「背景层 + 文字层」结构，背景不透明度可调（文字始终清晰）；空态/重新生成等颜色令牌化 |

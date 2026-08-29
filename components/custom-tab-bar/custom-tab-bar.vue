@@ -22,12 +22,6 @@
 		props: {
 			active: { type: Number, default: 0 }
 		},
-		mounted() {
-			// `tabBar.custom:true` 仅对微信小程序隐藏原生 tabBar；H5/App 仍会渲染原生栏
-			// （H5 靠 pages.json 里 list 项的 `visible:false` 隐藏）。这里在组件内再兜底
-			// 显式隐藏一次（无动画、无失败回调），确保三端都只剩本自绘栏，不出现双栏。
-			uni.hideTabBar({ animation: false })
-		},
 		data() {
 			return {
 				tabs: [
@@ -40,7 +34,9 @@
 		methods: {
 			switchTo(it) {
 				if (this.tabs.indexOf(it) === this.active) return
-				uni.switchTab({ url: it.page })
+				// 页面已非原生 tabBar 页（pages.json 不再声明 tabBar，避免原生栏/占位残留），
+				// 用 reLaunch 全栈替换实现"底栏切 tab"行为（清栈，返回键不回上一 tab）
+				uni.reLaunch({ url: it.page })
 			}
 		}
 	}

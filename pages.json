@@ -101,29 +101,5 @@
 		"backgroundColor": "#F6F7FB",
 		"backgroundTextStyle": "dark"
 	},
-	"tabBar": {
-		"custom": true,
-		"color": "#999999",
-		"selectedColor": "#5B7CFA",
-		"backgroundColor": "#ffffff",
-		"borderStyle": "black",
-		"list": [
-			{
-				"pagePath": "pages/chat/chat",
-				"text": "聊天",
-				"visible": false
-			},
-			{
-				"pagePath": "pages/memory/memory",
-				"text": "记忆",
-				"visible": false
-			},
-			{
-				"pagePath": "pages/settings/settings",
-				"text": "设置",
-				"visible": false
-			}
-		]
-	},
 	"uniIdRouter": {}
 }
