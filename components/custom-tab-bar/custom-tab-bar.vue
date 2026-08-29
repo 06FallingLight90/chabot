@@ -25,9 +25,9 @@
 		data() {
 			return {
 				tabs: [
-					{ page: '/pages/chat/chat', text: '聊天', ico: '💬' },
-					{ page: '/pages/memory/memory', text: '记忆', ico: '🧠' },
-					{ page: '/pages/settings/settings', text: '设置', ico: '⚙️' }
+					{ page: '/pages/chat/chat', text: '聊天'},
+					{ page: '/pages/memory/memory', text: '记忆'},
+					{ page: '/pages/settings/settings', text: '设置'}
 				]
 			}
 		},
