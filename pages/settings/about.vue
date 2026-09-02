@@ -47,8 +47,8 @@
 	export default {
 		data() {
 			return {
-				version: (manifest && manifest.versionName) ? manifest.versionName : '1.3.0',
-				versionCode: String((manifest && manifest.versionCode) ? manifest.versionCode : '130'),
+				version: (manifest && manifest.versionName) ? manifest.versionName : '1.4.0',
+				versionCode: String((manifest && manifest.versionCode) ? manifest.versionCode : '140'),
 				repoUrl: 'https://github.com/06FallingLight90/chabot',
 				koishiUrl: 'https://github.com/Koishi007/koishi-ai-pet'
 			}
