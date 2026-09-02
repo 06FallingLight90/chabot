@@ -799,6 +799,32 @@ assert(pa.getProactiveCountdown() === null, '关闭拟真后无倒计时（定�
 // 关闭拟真，恢复常规行为
 chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: false })
 
+console.log('\n[24b] 拟真聊天持久化到期时刻（进程结束重开补发）')
+// 开启拟真 + 自定义倒计时，重排写入持久化到期时刻
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: true, proactiveCustomSeconds: 12 })
+pa.rearmProactive()
+const persistedDue = storage.getSetting('proactive_due_at', 0)
+assert(persistedDue > Date.now(), '重排后到期时刻已持久化（> 当前时间）')
+// 模拟进程重启：新建模块实例（_dueAt 初始 0），并把持久化到期时刻改为已过去
+const persistedKey = 'proactive_due_at'
+storage.setSetting(persistedKey, Date.now() - 5000)
+globalThis.uni.request = (opts) => {
+	captured = opts
+	opts.success({ statusCode: 200, data: { choices: [{ message: { content: '你回来啦~\nScene: 用户回来了' } }] } })
+}
+const pa2 = await import('../utils/chat-proactive.js?restart=' + Date.now())
+await pa2.catchUpProactive()
+await new Promise((r) => setTimeout(r, 0)) // 补发为异步 fire-and-forget，冲刷微任务等待落库/情景更新完成
+assert(!!captured && captured.data.messages[0].content.includes('[拟真聊天]'), '重开后感知到期：补发主动请求')
+assert(storage.getScene() === '用户回来了', '重开补发解析并更新情景')
+// 补发后重新写入一个新的（未来的）到期时刻
+assert(storage.getSetting(persistedKey, 0) > Date.now(), '补发后重新持久化未来的到期时刻')
+// 关闭拟真时持久化到期时刻被清空
+storage.setSetting(persistedKey, Date.now() - 5000)
+chat.saveSettings({ ...chat.getConversationSettings(), proactiveEnabled: false })
+pa2.catchUpProactive()
+assert(storage.getSetting(persistedKey, 0) === 0, '关闭拟真后持久化到期时刻清空（防残留误触发）')
+
 console.log('\n================================')
 if (failed === 0) {
 	console.log('全部断言通过 ✓')

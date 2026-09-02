@@ -6,6 +6,8 @@
  * 低后台占用设计：单条链式 setTimeout（非轮询，空闲零唤醒），退后台**不清定时器**——
  * 单条 pending timeout 后台零 CPU；H5 隐藏标签页会被浏览器节流（约 1 次/分钟，够用）；
  * App 后台 JS 挂起时定时器不触发，回前台由 catchUpProactive 检测到期补发。
+ * **进程结束后重开（关页/杀进程）也不丢触发**：到期时刻持久化到 storage，
+ * 重开时 catchUpProactive 据此判断"关闭期间已到触发时刻"，已过则补发一次再重排。
  *
  * 主动消息格式（与普通回复一致，由 parseAndValidateReply 强制校验）：
  * 每条 ≤1 句、连续表情 ≤2，多条消息用换行分隔；话题临近结束时模型用短句/表情收尾。
@@ -16,7 +18,9 @@ import {
 	addChatRow,
 	getSceneHistory,
 	setScene,
-	getConversationCompression
+	getConversationCompression,
+	getSetting,
+	setSetting
 } from './storage.js'
 import { memoryStore } from './chat-state.js'
 import { getConversationSettings } from './chat-settings.js'
@@ -38,6 +42,7 @@ const LEVEL_RANGES = {
 }
 const TICK_MAX_MS = 60 * 60 * 1000 // 单次定时最长 60 分钟：即使间隔更长也先醒一次，保证窗口/设置变化及时响应
 const HISTORY_ENTRIES = 15 // 主动消息注入的对话历史条数（上限，与 sendMessage 一致）
+const PROACTIVE_DUE_KEY = 'proactive_due_at' // 到期时刻持久化键：进程结束（关页/杀进程）后重开时，据此感知"关闭期间已到触发时刻"并补发
 
 // ---------- 状态 ----------
 
@@ -45,6 +50,20 @@ let _timer = null // 当前定时器
 let _dueAt = 0 // 下一触发时刻（退后台期间保留，供回前台补发判断）
 let _suppressed = false // 聊天页 loading 时抑制（等待 LLM 回复期间不打扰）
 let _busy = false // 主动请求进行中（防止重入）
+
+/** 读取持久化的到期时刻（绝对时间戳，无则 0） */
+function _loadDueAt() {
+	return parseInt(getSetting(PROACTIVE_DUE_KEY, 0), 10) || 0
+}
+
+/** 持久化到期时刻（进程结束后重开时用于判断是否错过触发；0 = 清空） */
+function _saveDueAt(v) {
+	try {
+		setSetting(PROACTIVE_DUE_KEY, v)
+	} catch (e) {
+		/* ignore：存储失败不影响调度本身 */
+	}
+}
 
 function _clearTimer() {
 	if (_timer) {
@@ -152,11 +171,26 @@ function _fmtDuration(ms) {
 function _schedule() {
 	_clearTimer()
 	const s = getConversationSettings()
-	if (!_featureOn(s)) return
+	if (!_featureOn(s)) {
+		// 功能关闭（关闭拟真/切虚拟时间/未配 API）：清掉持久化的到期时刻，避免残留值在日后重开时误触发
+		_dueAt = 0
+		_saveDueAt(0)
+		return
+	}
 	const delay = _nextDelay(s)
 	_dueAt = Date.now() + delay
+	_saveDueAt(_dueAt)
 	_timer = setTimeout(_tick, Math.min(delay, TICK_MAX_MS))
 	addLog('info', '拟真聊天调度', `下次主动消息：${_fmtDuration(delay)} 后（${s.proactiveLevel} 档）`)
+}
+
+/** 进程重启后恢复定时器：持久化到期时刻仍在未来→按剩余时间重挂；否则全新重排（或已补发过→重新起一轮） */
+function _armFromPersisted() {
+	if (_dueAt && _dueAt > Date.now()) {
+		_timer = setTimeout(_tick, Math.min(_dueAt - Date.now(), TICK_MAX_MS))
+	} else {
+		_schedule()
+	}
 }
 
 function _tick() {
@@ -189,28 +223,32 @@ export function getProactiveCountdown() {
 }
 
 /**
- * 回前台补发：若退后台期间已到触发时刻，立即补发一次；随后按当前会话设置重排。
+ * 回前台/重开补发：若到期时刻已过（含进程结束后重开的场景），立即补发一次；随后恢复调度。
  * 幂等，可随时调用（切会话/改设置后用于让调度器立即按新状态重排）。
  */
 export function catchUpProactive() {
 	const s = getConversationSettings()
 	if (!_featureOn(s)) {
-		// 功能关闭（关闭拟真/切到虚拟时间/未配 API）：清掉在途定时器，避免残留的 no-op 触发
+		// 功能关闭（关闭拟真/切到虚拟时间/未配 API）：清掉在途定时器与持久化到期时刻
 		_clearTimer()
 		_dueAt = 0
+		_saveDueAt(0)
 		return
 	}
+	// 进程结束后内存 _dueAt 清零，但持久化的到期时刻仍在：据其判断"关闭期间是否已到触发时刻"
+	if (!_dueAt) _dueAt = _loadDueAt()
 	if (_dueAt && Date.now() >= _dueAt) {
-		// 清掉即将到期的旧定时器，避免其随后再触发一次造成重复发送，并立即重排
+		// 清掉即将到期的旧定时器，避免其随后再触发一次造成重复发送，并清空持久化到期时刻
 		_clearTimer()
 		_dueAt = 0
+		_saveDueAt(0)
 		sendProactiveBurst()
 			.then((r) => {
 				if (r === null) addLog('info', '拟真聊天补发', '已到触发时刻但未发送（原因见「主动消息跳过」日志）')
 			})
 			.catch((e) => addLog('err', '主动消息失败', (e && e.stack) || String(e)))
 	}
-	if (!_timer) _schedule()
+	if (!_timer) _armFromPersisted()
 }
 
 /**
