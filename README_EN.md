@@ -67,6 +67,7 @@ The AI reaches out to you like a real person instead of just waiting for replies
 - **On-device, zero backend**: all data stays on your device, no cloud sync; **no third-party npm dependency**, `package.json` is only used for `npm test`
 - **Reliable cross-platform persistence**: unified `uni.setStorageSync`, works on App / H5 / Mini Program and survives restarts
 - **Modular chat service**: `chat.js` is only a facade, split into 5 domains (state / settings / conversations / compress / proactive) that eliminate circular dependencies while keeping call entry points unchanged
+- **Storage & memory are equally modular**: `storage.js` became a facade split into `storage-state` (shared live-ref `_store`) / conversations / scene / API profiles / background; `memory.js` extracted pure-function modules `memory-similarity` / `memory-parse` / `memory-constants` while keeping the core class and public API unchanged
 - **Memory algorithm engine**: character bigram Jaccard + LCS dual-similarity dedup, half-life decay, layered retrieval & capacity governance, recall cooldown (`memory.js`)
 - **LLM compatibility layer**: OpenAI-compatible client with Ollama support; built-in **thinking-mode fallback** (`reasoning_effort` with cascading fallback + `reasoning`/`thinking` field fallback) — a three-layer fix for Qwen3-style "request succeeds but reply is empty"
 - **Debug log instrumentation**: a ring buffer records every request / response / error / key operation, expandable to full content and clearable in one tap
@@ -119,8 +120,16 @@ See [CLAUDE.md](CLAUDE.md) for details.
 │   ├── memory/memory.vue  # Memory page (filter / create / edit / multi-select delete)
 │   └── settings/settings.vue  # Settings (API / presets / thinking mode / persona / background / logs)
 ├── utils/
-│   ├── storage.js         # Cross-platform persistence (conversations / scenes / API presets / bg image)
-│   ├── memory.js          # Memory core (L1/L2/L3, dedup, layered retrieval, maintenance)
+│   ├── storage.js         # Cross-platform persistence facade (re-exports domain modules, callers unchanged)
+│   ├── storage-state.js   # Shared live-ref state (_store) + low-level storage + settings + init/migration
+│   ├── storage-conversations.js # Conversations domain (CRUD / messages / compress / settings snapshot / duplicate)
+│   ├── storage-scene.js   # Scene domain + input draft
+│   ├── storage-api.js     # API profile domain (up to 3)
+│   ├── storage-background.js # Chat background image domain
+│   ├── memory.js          # Memory core (MemoryStore: save / retrieve / maintain / manage)
+│   ├── memory-similarity.js # Memory similarity pure functions (bigram Jaccard + LCS)
+│   ├── memory-parse.js    # Memory-line parsing + memory time formatting
+│   ├── memory-constants.js # Memory constants (L1/L2/L3 half-life / thresholds / stop words)
 │   ├── prompts.js         # System prompt builder + persona / provider presets
 │   ├── chat.js            # Chat orchestration facade + send pipeline (single public entry)
 │   ├── chat-state.js      # Shared chat state (memoryStore singleton / last request cache)

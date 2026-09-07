@@ -67,6 +67,7 @@ AI 不止会聊天，更**记得你**。通过内置「三级记忆 + LLM 自动
 - **纯端侧、零后端**：数据仅保存在本机，无任何云端同步；且**无第三方 npm 依赖**，`package.json` 仅用于 `npm test`
 - **跨端可靠持久化**：统一使用 `uni.setStorageSync` 同步存储，App / H5 / 小程序通用、重启不丢
 - **模块化聊天服务**：`chat.js` 仅作门面，按业务域拆分为状态 / 设置 / 会话 / 压缩 / 拟真 5 个模块，消除循环依赖，各调用入口不变
+- **存储与记忆同样模块化**：`storage.js` 改作门面，按域拆为 `storage-state`（共享活引用 `_store`）/ 会话 / 情景 / API 预设 / 背景图；`memory.js` 拆出纯函数模块 `memory-similarity` / `memory-parse` / `memory-constants`，核心类与对外接口保持不变
 - **记忆算法引擎**：字符 bigram Jaccard + LCS 双重相似度去重、半衰期衰减、分层检索与容量治理、召回冷却（`memory.js`）
 - **LLM 兼容层**：OpenAI 兼容客户端，支持 Ollama 本地模型；内置**思考模式兜底**（`reasoning_effort` 连降三级容错 + `reasoning`/`thinking` 字段回退），解决 Qwen3 等「请求成功但回复为空」问题的三层保障
 - **调试日志埋点**：环形缓冲记录每次请求 / 响应 / 错误 / 关键操作，可展开全文、一键清空
@@ -119,8 +120,16 @@ AI 不止会聊天，更**记得你**。通过内置「三级记忆 + LLM 自动
 │   ├── memory/memory.vue  # 记忆页（筛选 / 新建 / 编辑 / 多选删除）
 │   └── settings/settings.vue  # 设置页（接口 / API预设 / 思考模式 / 人格 / 背景 / 调试日志）
 ├── utils/
-│   ├── storage.js         # 跨端持久化层（多会话模型 / 情景 / API 预设 / 背景图）
-│   ├── memory.js          # 记忆核心（L1/L2/L3、相似度去重、分层检索、维护）
+│   ├── storage.js         # 跨端持久化门面（re-export 各域模块，调用方零改动）
+│   ├── storage-state.js   # 共享活引用状态（_store）+ 底层读写 + 设置项 + 初始化迁移
+│   ├── storage-conversations.js # 会话域（CRUD/消息/压缩/设置快照/复制）
+│   ├── storage-scene.js   # 情景域 + 输入草稿
+│   ├── storage-api.js     # API 预设域（至多 3 套）
+│   ├── storage-background.js # 聊天背景图域
+│   ├── memory.js          # 记忆核心（MemoryStore 类：保存/检索/维护/管理）
+│   ├── memory-similarity.js # 记忆相似度纯函数（bigram Jaccard + LCS）
+│   ├── memory-parse.js    # Memory 行解析 + 记忆时间格式化
+│   ├── memory-constants.js # 记忆常量（三级半衰期/阈值/停用词）
 │   ├── prompts.js         # 系统提示词构建 + 人格/接口预设
 │   ├── chat.js            # 聊天服务门面 + 发送主链路（统一对外导出）
 │   ├── chat-state.js      # 聊天服务共享状态（memoryStore 单例 / 最近请求缓存）

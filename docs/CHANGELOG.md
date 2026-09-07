@@ -9,6 +9,9 @@
 
 ### 变更
 - **自绘底栏组件改名 `custom-tab-bar` → `app-tab-bar`**：`custom-tab-bar` 是 uni-app H5 平台保留组件名，同名触发 easycom/编译冲突告警——组件移位至 `components/app-tab-bar/app-tab-bar.vue`（`name: 'AppTabBar'`），聊天/记忆/设置三页改用 `<app-tab-bar>`；功能与三端行为不变
+- **`memory.js` / `storage.js` 按域拆分重构**：纯行为重构，对外接口与数据格式不变、`npm test` 全绿
+  - `memory.js` 拆出 3 个纯函数模块——`memory-constants.js`（三级半衰期/阈值/上限/停用词）、`memory-similarity.js`（bigram Jaccard + LCS 相似度）、`memory-parse.js`（`parseMemoryLine`/`formatMemoryTime`）；`memory.js` 保留 `MemoryStore` 类并 re-export `parseMemoryLine`/`formatMemoryTime`，既有调用方零改动
+  - `storage.js` 改为**门面**，拆为 `storage-state.js`（跨域共享活引用状态 `_store` + 底层读写 + 设置项 + 初始化迁移）/ `storage-conversations.js`（会话域）/ `storage-scene.js`（情景域 + 输入草稿）/ `storage-api.js`（API 预设）/ `storage-background.js`（背景图）；共享状态统一经 `_store` 读写，防止各域缓存副本导致"替换后不同步"
 
 ---
 
