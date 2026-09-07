@@ -31,8 +31,16 @@
 │   ├── emoji/emoji.vue    # 表情管理页（批量上传逐张命名/改名/删除）
 │   └── settings/settings.vue  # 设置页（接口/API预设/思考模式/请求次数/人格/聊天表情包/语音阅读/聊天背景/上下文压缩/数据管理/调试日志）
 ├── utils/
-│   ├── storage.js         # 跨端持久化层 + 设置项 + API预设 + 背景图 + 多会话模型 + 情景历史
-│   ├── memory.js          # 记忆核心（MemoryStore 类 + 相似度算法）
+│   ├── storage.js         # 跨端持久化门面（显式 re-export 各域模块公共接口，各调用方零改动）
+│   ├── storage-state.js   # 存储底层基础设施 + 会话共享状态（活引用 _store）+ 设置项 + 初始化迁移
+│   ├── storage-conversations.js # 存储会话域（CRUD/消息/压缩/设置快照/人格复制）
+│   ├── storage-scene.js   # 存储情景域 + 输入草稿
+│   ├── storage-api.js     # 存储 API 预设域（至多 3 套）
+│   ├── storage-background.js # 存储聊天背景图域（App/小程序存文件，H5 canvas 压缩 base64）
+│   ├── memory.js          # 记忆核心（MemoryStore 类 + 保存/检索/维护/管理）
+│   ├── memory-similarity.js # 记忆相似度纯函数（bigram Jaccard + LCS 序列）
+│   ├── memory-parse.js    # Memory 行解析 + 记忆时间格式化（纯函数）
+│   ├── memory-constants.js # 记忆常量（三级半衰期/阈值/上限/停用词）
 │   ├── prompts.js         # 系统提示词构建 + 人格预设 + 表情包引导 + 自定义示例 + 接口预设
 │   ├── emojis.js          # 表情包数据层（全局列表、名称校验、跨端图片持久化、$名$ 解析、拖拽重排）
 │   ├── llm.js             # OpenAI 兼容 LLM 客户端（uni.request + 调试日志埋点，stream:false + reasoning_effort 思考控制）
@@ -67,9 +75,12 @@
 - **分层检索** `retrieveContext`：**全量召回所有 L1 核心事实**（`L1_MAX_COUNT=20` 上限，超出时自动将重要性最低的 L1 降级为 L2，i5 不豁免总量；降级按 importance 升序、同分按创建时间旧优先）+ 新鲜槽 + MMR 多样性槽，总配额 `RECALL_COUNT=30`，λ=0.7；L1 满员时 system 注入 `[记忆容量]` 段（`buildSystemPrompt` 的 `l1Usage` 参数）引导 LLM 先逐字修改/删除旧 L1 再新增
 - **维护** `maintenance`：L3 过期清理(3天) / L2→L3 降级(有效重要性<2.2) / L3 高频访问升 L2(6h 内 6 次) / 容量淘汰(上限 200)
 - **等级-优先级一致性**：L1 至少 3，L3 不超过 4，importance≤2 自动降 L3
-- 关键常量均位于 `memory.js` 顶部
+- 关键常量均位于 `memory-constants.js`
 
-### 跨端持久化（utils/storage.js）
+### 跨端持久化（utils/storage.js 门面 + storage-*.js 域模块）
+
+storage.js 现为**门面**，显式 re-export `storage-state` / `storage-conversations` / `storage-scene` / `storage-api` / `storage-background` 各域公共接口，既有调用方零改动。
+- `storage-state.js` 持有**跨域共享的活引用状态 `_store`**（当前会话的 messages/memories 指针），域模块通过其导出的内部工具（`_activeConversation`/`_commitActive`/`_persistConversations` 等）读写，保证"替换后不同步"不出现；**新增存储读写应遵循此共享状态约定，勿在各域各自缓存副本**
 
 - **统一使用 `uni.setStorageSync` 同步存储**（App / H5 / 小程序均可用，重启不丢）
 - 曾尝试 App 端 plus.sqlite（真 SQLite 文件），但其 `openDatabase`/`selectSql`/`executeSql` 均为**异步回调 API**，与同步接口不匹配，导致启动读不到数据且全量重写清空数据，故已移除 sqlite 分支（历史原因详见文件头注释）

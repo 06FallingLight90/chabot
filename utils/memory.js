@@ -8,94 +8,30 @@
  */
 
 import { getMemories, replaceMemories, persistMemories, nextMemoryId, getConversationPersonality, getSetting } from './storage.js'
-
-const MAX_MEMORIES = 200 // 记忆最大容量
-const RECALL_COUNT = 30 // 每次对话召回的记忆条数（全量 L1 优先 + 新鲜/MMR 补足）
-const L1_MAX_COUNT = 20 // L1 核心记忆数量上限（超出时自动将重要性最低的降级为 L2）
-const RECALL_COOLDOWN_SECONDS = 300 // 记忆召回冷却时间（秒）
-const L3_EXPIRE_DAYS = 3 // L3 临时记忆过期天数
-const DEDUP_THRESHOLD = 0.6 // 近似重复阈值（低于此值视为不同记忆）
-const DUPLICATE_THRESHOLD = 0.85 // 高相似阈值（高于此值触发冷却拦截）
-const L2_DEMOTE_THRESHOLD = 2.2 // effective_importance 低于此值的非永久记忆降级
-const L3_PROMOTE_WINDOW_MS = 6 * 3600 * 1000 // L3 高频访问升级窗口
-const L3_PROMOTE_HITS = 6 // 窗口内访问次数达到该值 → L3 升 L2
-const COOLDOWN_BOOST_CAP = 5 // 冷却期复读 importance 奖励上限
-const RECALL_BONUS_TAU_DAYS = 0.5 // 回忆强化半衰期（天）
-const RECALL_BONUS_MAX = 0.5 // 回忆强化最大加成比例
-const BLOCKED_TTL_MS = 120 * 1000 // 被冷却拦截内容的保留时间
-
-const HALF_LIFE = {
-	// level: { importance: 半衰期(天) }，仅 L1+importance=5 永不衰减
-	L1: { 5: Infinity, 4: 30, 3: 21, 2: 14, 1: 7 },
-	L2: { 5: 60, 4: 30, 3: 14, 2: 7, 1: 3 },
-	L3: { 5: 3, 4: 3, 3: 2, 2: 1, 1: 1 }
-}
-const LEVEL_ORDER = { L1: 0, L2: 1, L3: 2 }
-
-const STOP_WORDS = new Set([
-	'的', '地', '得', '了', '着', '过', '吗', '呢', '吧', '啊', '呀', '哦', '哇', '嘛', '呗', '么',
-	'我', '你', '他', '她', '它', '我们', '你们', '他们', '她们', '它们',
-	'这', '那', '这个', '那个', '这些', '那些', '这里', '那里', '这样', '那样',
-	'自己', '别人', '大家', '谁', '什么', '怎么', '怎样', '为什么', '哪', '哪里',
-	'在', '和', '与', '及', '或', '把', '被', '让', '给', '对', '从', '向', '往', '于',
-	'以', '为', '由', '跟', '同', '关于', '除了',
-	'因为', '所以', '如果', '虽然', '但是', '而且', '并且', '还是', '或者', '然后', '接着', '由于', '即使', '只要', '只有',
-	'很', '非常', '太', '更', '最', '也', '还', '就', '都', '已经', '正在', '将要', '马上', '立刻',
-	'不', '没', '没有', '不是', '不要', '不能', '别', '勿', '未',
-	'会', '能', '可以', '应该', '可能', '必须', '需要', '或许', '也许',
-	'又', '再', '只', '只是', '仅仅', '甚至', '其实', '确实', '真的', '当然',
-	'一定', '肯定', '大概', '经常', '偶尔', '一直', '总是', '从不', '永远',
-	'比如', '例如', '不过', '此外', '另外',
-	'是', '有', '说', '做', '看', '想', '觉得', '知道', '感觉', '认为', '要', '去', '来', '到', '上', '下', '进', '出',
-	'个', '些', '种', '类', '一', '二', '三', '几', '多', '少',
-	'现在', '以前', '以后', '之前', '之后', '今天', '明天', '昨天', '刚才', '未来'
-])
+import { computeSimilarity } from './memory-similarity.js'
+import { parseMemoryLine, formatMemoryTime } from './memory-parse.js'
+export { parseMemoryLine, formatMemoryTime } // 兼容历史调用方（chat.js / 页面）
+import {
+	MAX_MEMORIES,
+	RECALL_COUNT,
+	L1_MAX_COUNT,
+	RECALL_COOLDOWN_SECONDS,
+	L3_EXPIRE_DAYS,
+	DEDUP_THRESHOLD,
+	DUPLICATE_THRESHOLD,
+	L2_DEMOTE_THRESHOLD,
+	L3_PROMOTE_WINDOW_MS,
+	L3_PROMOTE_HITS,
+	COOLDOWN_BOOST_CAP,
+	RECALL_BONUS_TAU_DAYS,
+	RECALL_BONUS_MAX,
+	BLOCKED_TTL_MS,
+	HALF_LIFE,
+	LEVEL_ORDER,
+	STOP_WORDS
+} from './memory-constants.js'
 
 const nowIso = () => new Date().toISOString()
-
-// ---------- 轻量文本相似度 ----------
-function charNGrams(text, n = 2) {
-	const clean = String(text).replace(/[^\w\u4e00-\u9fa5]/g, '').toLowerCase()
-	const set = new Set()
-	if (clean.length < n) {
-		if (clean) set.add(clean)
-		return set
-	}
-	for (let i = 0; i <= clean.length - n; i++) set.add(clean.slice(i, i + n))
-	return set
-}
-
-function jaccard(a, b) {
-	if (!a.size || !b.size) return 0
-	let inter = 0
-	for (const x of a) if (b.has(x)) inter++
-	const union = a.size + b.size - inter
-	return union ? inter / union : 0
-}
-
-/** 轻量 LCS 相似度（替代 Python difflib.SequenceMatcher.ratio） */
-function sequenceRatio(a, b) {
-	a = String(a)
-	b = String(b)
-	const m = a.length
-	const n = b.length
-	if (!m || !n) return 0
-	let prev = new Array(n + 1).fill(0)
-	for (let i = 1; i <= m; i++) {
-		const cur = new Array(n + 1).fill(0)
-		for (let j = 1; j <= n; j++) {
-			cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
-		}
-		prev = cur
-	}
-	return (2 * prev[n]) / (m + n)
-}
-
-/** 综合相似度：Jaccard(0.6) 抗增删 + 序列相似度(0.4) 抗语序打乱 */
-function computeSimilarity(t1, t2) {
-	if (!t1 || !t2) return 0
-	return 0.6 * jaccard(charNGrams(t1), charNGrams(t2)) + 0.4 * sequenceRatio(t1, t2)
-}
 
 // ---------- 记忆存储 ----------
 export class MemoryStore {
@@ -739,54 +675,4 @@ export class MemoryStore {
 		if (patch.keywords !== undefined) r.keywords = patch.keywords
 		persistMemories()
 	}
-}
-
-/**
- * 纯解析 Memory 行（不写入），供格式校验与 saveFromLine 复用。
- * 兼容三种操作：新增 / 修改 / 删除；格式非法返回 null。
- * @param {string} line 原始 Memory 行（含 "Memory:" 前缀）
- * @returns {{action:'delete',content:string}|{action:'modify',oldContent:string,rest:string}|{action:'add',category:string,parts:string[]}|null}
- */
-export function parseMemoryLine(line) {
-	line = (line || '').trim().replace(/^memory[:：]\s*/i, '')
-	if (!line) return null
-
-	// 删除: Memory: 删除 原内容
-	if (/^删除\s+/i.test(line)) {
-		const target = line.replace(/^删除\s+/i, '').trim()
-		return target ? { action: 'delete', content: target } : null
-	}
-
-	// 修改: Memory: 修改 原内容 → 新内容 | keywords:.. | ...（兼容半角→全角→和破折号）
-	const modMatch = line.match(/^修改\s+(.+?)\s*(?:→|→|—)\s*(.+)$/i)
-	if (modMatch) {
-		const oldContent = modMatch[1].trim()
-		const rest = modMatch[2].trim()
-		const parts = rest.split('|').map((p) => p.trim()).filter(Boolean)
-		if (oldContent && parts.length && parts[0]) return { action: 'modify', oldContent, rest }
-		return null
-	}
-
-	// 新增：兼容 "category content | ..." 与 "category: content | ..."
-	let m = line.match(/^\[([\w]+)\][:：]?\s*(.+)$/)
-	if (!m) m = line.match(/^(\w+)[:：]?\s+(.+)$/)
-	if (!m) return null
-	const category = m[1]
-	const parts = m[2].split('|').map((p) => p.trim()).filter(Boolean)
-	if (!parts.length || !parts[0]) return null
-	return { action: 'add', category, parts }
-}
-
-/** 记忆创建时间的简短中文描述 */
-export function formatMemoryTime(iso) {
-	if (!iso) return ''
-	const t = Date.parse(iso)
-	if (Number.isNaN(t)) return ''
-	const s = Math.floor((Date.now() - t) / 1000)
-	if (s < 60) return '（刚刚）'
-	if (s < 3600) return `（${Math.floor(s / 60)}分钟前）`
-	if (s < 86400) return `（${Math.floor(s / 3600)}小时前）`
-	if (s < 172800) return '（昨天）'
-	if (s < 2592000) return `（${Math.floor(s / 86400)}天前）`
-	return `（${iso.slice(5, 10)}）`
 }
