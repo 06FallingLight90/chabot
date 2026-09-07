@@ -1,7 +1,7 @@
 <template>
-	<!-- 自绘底部导航栏：启用 pages.json 里 tabBar.custom=true 后，原生 tabBar 不再渲染，
-		 由本组件完全接管三端底部导航，并用主题令牌 var(--c-*) 跟随手动深浅色切换。
-		 固定在屏幕底部；所属页面需预留 calc(var(--ctab-h) + env(safe-area-inset-bottom)) 的底部空间。 -->
+	<!-- 自绘底部导航栏：区别于 uni-app 内置的 h5 专属 custom-tab-bar 组件，本组件用 app-tab-bar 命名避免平台保留名冲突，
+		 接管三端底部导航，并用主题令牌 var(--c-*) 跟随手动深浅色切换，固定在屏幕底部；
+		 所属页面需预留 calc(var(--ctab-h) + env(safe-area-inset-bottom)) 的底部空间。 -->
 	<view class="cust-tab">
 		<view
 			v-for="(it, i) in tabs"
@@ -18,7 +18,7 @@
 
 <script>
 	export default {
-		name: 'CustomTabBar',
+		name: 'AppTabBar',
 		props: {
 			active: { type: Number, default: 0 }
 		},

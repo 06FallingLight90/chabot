@@ -1,5 +1,17 @@
 # 更新日志
 
+## 2026-09-07
+
+### 修复
+- **切 tab 后聊天页回到最底部**：底栏切页用 `uni.reLaunch` 重建聊天页，此前不主动滚动，切回时停留最早记录——`onShow` 里补滚到底部（最新消息）
+- **未发送输入切页丢失**：`reLaunch` 重建页面导致输入框内容被清空——输入内容实时写入会话草稿（storage 新增 `getConversationDraft` / `setConversationDraft`，随会话独立存储），页面重建时 `onLoad` 恢复、切换会话按各会话草稿恢复
+- **记忆页深色背景只有一屏高**：记忆页 `.list`（`scroll-view`）为 `flex:1` 但缺 `min-height:0`，内容多时按内容撑高溢出 `100vh` 页面、下方露出默认浅色背景——加 `min-height:0` 让其约束在剩余空间内内部滚动
+
+### 变更
+- **自绘底栏组件改名 `custom-tab-bar` → `app-tab-bar`**：`custom-tab-bar` 是 uni-app H5 平台保留组件名，同名触发 easycom/编译冲突告警——组件移位至 `components/app-tab-bar/app-tab-bar.vue`（`name: 'AppTabBar'`），聊天/记忆/设置三页改用 `<app-tab-bar>`；功能与三端行为不变
+
+---
+
 ## 2026-08-29
 
 > 本轮为**界面美化与现代化**改造（采用 **C 方案：wot-design-uni 按需引入 + 自建设计令牌系统**），纯端侧 UI 改造，**不改变任何业务逻辑、存储结构、记忆/聊天链路与对外接口**；核心逻辑测试（24 组记忆 + 8 组表情断言）全部保持通过。

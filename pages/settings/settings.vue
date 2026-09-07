@@ -28,16 +28,16 @@
 		</view>
 
 	<!-- 自绘底部导航栏（替代原生 tabBar，随主题深浅色切换） -->
-	<custom-tab-bar :active="2" />
+	<app-tab-bar :active="2" />
 </view>
 </template>
 
 <script>
 	import { getConversationSettings } from '../../utils/chat.js'
-	import CustomTabBar from '../../components/custom-tab-bar/custom-tab-bar.vue'
+	import AppTabBar from '../../components/app-tab-bar/app-tab-bar.vue'
 
 	export default {
-		components: { CustomTabBar },
+		components: { AppTabBar },
 		data() {
 			return {
 				needConfig: false, // 接口配置缺失（baseUrl/apiKey 未填）时置 true

@@ -35,7 +35,7 @@
 		/>
 
 		<!-- 自绘底部导航栏（替代原生 tabBar，随主题深浅色切换） -->
-		<custom-tab-bar :active="0" />
+		<app-tab-bar :active="0" />
 
 		<chat-emoji-panel
 			:open="showEmojiPanel"
@@ -59,7 +59,13 @@
 		popLastAssistant,
 		startNewConversation
 	} from '../../utils/chat.js'
-	import { getBackgroundImage, getScene, setScene } from '../../utils/storage.js'
+	import {
+		getBackgroundImage,
+		getScene,
+		setScene,
+		getConversationDraft,
+		setConversationDraft
+	} from '../../utils/storage.js'
 	import { getEmojis } from '../../utils/emojis.js'
 	import { speakText, stopSpeaking } from '../../utils/tts.js'
 	import { setProactiveSuppressed, catchUpProactive, rearmProactive } from '../../utils/chat-proactive.js'
@@ -70,10 +76,10 @@
 	import ChatSceneEdit from './components/chat-scene-edit.vue'
 	import ChatHistory from './components/chat-history.vue'
 	import ChatPersona from './components/chat-persona.vue'
-	import CustomTabBar from '../../components/custom-tab-bar/custom-tab-bar.vue'
+	import AppTabBar from '../../components/app-tab-bar/app-tab-bar.vue'
 
 	export default {
-		components: { ChatHeader, ChatMsgList, ChatInputBar, ChatEmojiPanel, ChatSceneEdit, ChatHistory, ChatPersona, CustomTabBar },
+		components: { ChatHeader, ChatMsgList, ChatInputBar, ChatEmojiPanel, ChatSceneEdit, ChatHistory, ChatPersona, AppTabBar },
 		data() {
 			return {
 				messages: [],
@@ -106,8 +112,12 @@
 			if (this.$refs.msgList) this.$refs.msgList.resetScrollState()
 			// 拟真聊天：回到聊天页立即按当前会话设置重排调度（切会话/切 tab 后响应最新状态）
 			catchUpProactive()
+			// 切回聊天页默认展示最新消息（tab 切换用 reLaunch 重建页面，回落后本就在底部，滚动兜底对齐）
+			setTimeout(() => this.scrollBottom(), 50)
 		},
 		onLoad() {
+			// 恢复上次未发送的输入草稿（tab 切换 reLaunch 重建页面后不丢字）
+			this.input = getConversationDraft()
 			// 拟真聊天：接收调度器主动消息送达事件，刷新消息列表（页面在前台时的增量更新）
 			if (uni.$on) uni.$on('proactive-burst', this.onProactiveBurst)
 			// 监听键盘高度（App / 微信小程序）：表情栏打开时唤起键盘，等键盘弹出
@@ -136,6 +146,12 @@
 			// #ifdef H5
 			if (this._onWinResize) window.removeEventListener('resize', this._onWinResize)
 			// #endif
+		},
+		watch: {
+			// 输入内容变化即写入当前会话草稿，跨 tab 切换（reLaunch 重建页面）不丢失
+			input(v) {
+				setConversationDraft(v)
+			}
 		},
 		methods: {
 			refreshHeader() {
@@ -307,6 +323,8 @@
 							stopSpeaking()
 							clearConversation()
 							this.messages = []
+							// 清空对话同步清空输入草稿
+							this.input = ''
 						}
 					}
 				})
@@ -318,9 +336,11 @@
 				startNewConversation()
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
+				this.input = getConversationDraft() // 新会话读取其自己的草稿（通常为空）
 				this.refreshHeader()
 				rearmProactive() // 新会话设置可能不同，立即按新会话重排
 				uni.showToast({ title: '已开始新对话', icon: 'none' })
+				this.scrollBottom()
 			},
 			openHistory() {
 				this.showHistory = true
@@ -333,8 +353,10 @@
 				stopSpeaking()
 				this.messages = getHistoryForUI()
 				this.scene = getScene()
+				this.input = getConversationDraft() // 切换会话后恢复该会话未发送的草稿
 				this.refreshHeader()
 				rearmProactive() // 切换会话后立即按新会话设置重排
+				this.scrollBottom()
 			},
 			// ---- 当前情景编辑 ----
 			openSceneEdit() {

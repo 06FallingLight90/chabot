@@ -384,6 +384,22 @@ function _set(key, val) {
 	}
 }
 
+// ---------- 输入草稿（未发送内容，跨 tab 切换/页面重建保留） ----------
+
+/** 当前会话的输入草稿（未发送内容），无则为空串 */
+export function getConversationDraft() {
+	const conv = _activeConversation()
+	return conv && typeof conv.draft === 'string' ? conv.draft : ''
+}
+
+/** 写入当前会话的输入草稿 */
+export function setConversationDraft(text) {
+	const conv = _activeConversation()
+	if (!conv) return
+	conv.draft = String(text == null ? '' : text)
+	_persistConversations()
+}
+
 // ---------- 当前情景（随会话独立） ----------
 
 const SCENE_HISTORY_MAX = 10 // 情景历史保留条数（FIFO，超出丢弃最旧）

@@ -91,17 +91,17 @@
 		</view>
 
 	<!-- 自绘底部导航栏（替代原生 tabBar，随主题深浅色切换） -->
-	<custom-tab-bar :active="1" />
+	<app-tab-bar :active="1" />
 </view>
 </template>
 
 <script>
 	import { memoryStore, maybeMaintenance } from '../../utils/chat.js'
 	import { getConversations, getActiveConversationId } from '../../utils/storage.js'
-	import CustomTabBar from '../../components/custom-tab-bar/custom-tab-bar.vue'
+	import AppTabBar from '../../components/app-tab-bar/app-tab-bar.vue'
 
 	export default {
-		components: { CustomTabBar },
+		components: { AppTabBar },
 		data() {
 			return {
 				level: '',
@@ -339,6 +339,7 @@
 
 	.list {
 		flex: 1;
+		min-height: 0; /* 允许 flex 项收缩，防止 scroll-view 按内容撑高溢出页面底色 */
 		padding: 16rpx 40rpx 40rpx;
 		box-sizing: border-box;
 	}
