@@ -236,23 +236,23 @@
 				this.setLoadingState(true)
 				this.scrollBottom()
 				sendMessage(text)
-					.then(({ reply, saved, burst }) => {
-						// 拟真模式：回复按换行拆分为多条气泡，逐条展示（与落库行一致）
-						if (burst && burst.length) {
-							for (const line of burst) this.messages.push({ role: 'assistant', content: line })
-						} else {
-							this.messages.push({ role: 'assistant', content: reply })
-						}
-						this.scene = getScene() // LLM 可能更新了当前情景
-						if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
-						this.speakReply(reply)
-					})
-					.catch((e) => {
-						this.messages.push({
-							role: 'assistant',
-							content: '⚠️ ' + (e && e.message ? e.message : '出错了')
+						.then(({ reply, saved }) => {
+							// 从存储重载历史（而非手动 push）：落库行携带唯一递增 id，作为 v-for 稳定 key；
+							// 若继续 push 无 id 的 {role,content}，多条消息会同落到 key "undefined_0"，
+							// 重复 key 会让 Vue 渲染错位（各条消息串成其它条目）
+							this.messages = getHistoryForUI()
+							this.scene = getScene() // LLM 可能更新了当前情景
+							if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
+							this.speakReply(reply)
 						})
-					})
+						.catch((e) => {
+							// 错误提示未落库：重载存储拿到真实 id 后，追加为末位唯一一条展示
+							this.messages = getHistoryForUI()
+							this.messages.push({
+								role: 'assistant',
+								content: '⚠️ ' + (e && e.message ? e.message : '出错了')
+							})
+						})
 					.finally(() => {
 						this.loading = false
 						this.setLoadingState(false)
@@ -280,22 +280,21 @@
 				this.setLoadingState(true)
 				// 重发最近一次请求：用户消息已落库，persistUser:false 避免重复记录同一句话
 				sendMessage(lastUser, { persistUser: false })
-					.then(({ reply, saved, burst }) => {
-						if (burst && burst.length) {
-							for (const line of burst) this.messages.push({ role: 'assistant', content: line })
-						} else {
-							this.messages.push({ role: 'assistant', content: reply })
-						}
-						this.scene = getScene()
-						if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
-						this.speakReply(reply)
-					})
-					.catch((e) => {
-						this.messages.push({
-							role: 'assistant',
-							content: '⚠️ ' + (e && e.message ? e.message : '出错了')
+						.then(({ reply, saved }) => {
+							// 同 send()：从存储重载历史让消息携带真实 id，避免无 id 消息产生重复 key 导致渲染串位
+							this.messages = getHistoryForUI()
+							this.scene = getScene()
+							if (saved > 0) uni.showToast({ title: '已记住 ' + saved + ' 条', icon: 'none' })
+							this.speakReply(reply)
 						})
-					})
+						.catch((e) => {
+							// 错误提示未落库：重载存储拿到真实 id 后，追加为末位唯一一条展示
+							this.messages = getHistoryForUI()
+							this.messages.push({
+								role: 'assistant',
+								content: '⚠️ ' + (e && e.message ? e.message : '出错了')
+							})
+						})
 					.finally(() => {
 						this.loading = false
 						this.setLoadingState(false)
